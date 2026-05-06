@@ -16,27 +16,31 @@ class FinancialEnricher:
     def _load_json(self, path):
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                try: return json.load(f)
+                except: return {}
         return {}
 
     def _save_json(self, path, data):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4)
 
-    def get_ticker(self, item, cat_name):
-        if cat_name == "cryptos":
-            symbol = item.get("crypto", {}).get("symbol")
-            return f"{symbol}-USD" if symbol else None
+    def get_ticker(self, item):
+        # Handle different structures (direct crypto or security object)
+        sec = item.get("security", {}) if "security" in item else item
+        if not isinstance(sec, dict): return None
         
-        # For investments (Stocks/ETFs)
-        sec = item.get("security", {})
         isin = sec.get("isin")
         symbol = sec.get("symbol")
-        exchange = sec.get("exchange", {}).get("name", "").lower()
         
-        if isin: return isin # yfinance supports some ISINs
+        # Crypto handling
+        if "crypto" in item:
+            symbol = item.get("crypto", {}).get("symbol")
+            return f"{symbol}-USD" if symbol else None
+
+        if isin and len(isin) == 12: return isin
         
         if symbol:
+            exchange = sec.get("exchange", {}).get("name", "").lower()
             if "paris" in exchange: return f"{symbol}.PA"
             if "amsterdam" in exchange: return f"{symbol}.AS"
             if "xetra" in exchange or "frankfurt" in exchange: return f"{symbol}.DE"
@@ -45,40 +49,49 @@ class FinancialEnricher:
         return None
 
     def enrich(self, data):
-        logging.info("Enriching data with financial metrics...")
+        logging.info("Enriching nested data with financial metrics...")
         summary = data.get("portfolio_summary", {})
         categories = summary.get("categories", {})
-        total_wealth = sum(float(a.get("balance", 0)) for cat in categories.values() for a in cat) if isinstance(categories, dict) else 1
+        total_wealth = float(summary.get("total_amount", 0)) or 1
         
-        for cat_name, assets in categories.items():
-            # Calculate Envelope Total
-            envelope_total = sum(float(a.get("balance", 0)) for a in assets) or 1
-            
-            for asset in assets:
-                # 1. Internal Metrics
-                balance = float(asset.get("balance", 0))
-                asset["weight_global"] = (balance / total_wealth) * 100
-                asset["weight_envelope"] = (balance / envelope_total) * 100
+        for cat_name, accounts in categories.items():
+            for acc in accounts:
+                if not isinstance(acc, dict): continue
                 
-                # Strategic Tag
-                asset_id = str(asset.get("id", asset.get("name")))
-                asset["strategic_tag"] = self.tags.get(asset_id, "Core")
+                # Weight of account in global portfolio
+                acc_balance = float(acc.get("balance") or acc.get("current_value") or 0)
+                acc["weight_global"] = (acc_balance / total_wealth) * 100
                 
-                # 2. External Metrics (yfinance)
-                ticker_symbol = self.get_ticker(asset, cat_name)
-                if ticker_symbol:
-                    metrics = self._fetch_metrics(ticker_symbol)
-                    asset.update(metrics)
+                # Enrich sub-items (Securities in Investments, or Cryptos)
+                sub_items = acc.get("securities", []) or acc.get("cryptos", [])
+                if not sub_items and cat_name == "cryptos": sub_items = [acc] # Single crypto line
+                
+                for sub in sub_items:
+                    if not isinstance(sub, dict): continue
+                    
+                    sub_val = float(sub.get("current_value") or sub.get("balance") or 0)
+                    sub["weight_global"] = (sub_val / total_wealth) * 100
+                    sub["weight_envelope"] = (sub_val / acc_balance * 100) if acc_balance > 0 else 0
+                    
+                    # Strategic Tag
+                    asset_id = str(sub.get("id") or sub.get("name"))
+                    sub["strategic_tag"] = self.tags.get(asset_id, "Core")
+                    
+                    # Yahoo Finance Metrics
+                    ticker = self.get_ticker(sub)
+                    if ticker:
+                        metrics = self._fetch_metrics(ticker)
+                        sub.update(metrics)
         
         self._save_json(self.cache_path, self.cache)
         return data
 
     def _fetch_metrics(self, symbol):
         now = datetime.now()
-        # Simple cache logic (24h)
         if symbol in self.cache:
             cached = self.cache[symbol]
-            if (now - datetime.fromisoformat(cached["timestamp"])).hours < 24:
+            cached_time = datetime.fromisoformat(cached["timestamp"])
+            if (now - cached_time).total_seconds() < 86400: # 24h cache
                 return cached["data"]
 
         logging.debug(f"Fetching yfinance data for {symbol}")
@@ -89,38 +102,30 @@ class FinancialEnricher:
 
             current_price = hist['Close'].iloc[-1]
             
-            # Momentum
             def get_perf(days):
-                target_date = now - timedelta(days=days)
                 try:
-                    old_price = hist.iloc[hist.index.get_indexer([target_date], method='nearest')[0]]['Close']
+                    target_date = hist.index[-1] - timedelta(days=days)
+                    idx = hist.index.get_indexer([target_date], method='nearest')[0]
+                    old_price = hist['Close'].iloc[idx]
                     return ((current_price / old_price) - 1) * 100
-                except: return None
+                except: return 0.0
 
-            ytd_start = datetime(now.year, 1, 1)
+            ytd_start = datetime(now.year, 1, 1, tzinfo=hist.index.tz)
             try:
-                ytd_price = hist.iloc[hist.index.get_indexer([ytd_start], method='nearest')[0]]['Close']
+                idx_ytd = hist.index.get_indexer([ytd_start], method='nearest')[0]
+                ytd_price = hist['Close'].iloc[idx_ytd]
                 perf_ytd = ((current_price / ytd_price) - 1) * 100
-            except: perf_ytd = None
+            except: perf_ytd = 0.0
 
-            high_52w = hist['High'].max()
-            dist_high = ((current_price / high_52w) - 1) * 100 if high_52w else None
-
-            # Info (Sector, Beta, etc.)
-            info = t.info
-            
             metrics = {
                 "perf_1m": get_perf(30),
                 "perf_3m": get_perf(90),
                 "perf_1y": get_perf(365),
                 "perf_ytd": perf_ytd,
-                "dist_high_52w": dist_high,
-                "asset_class": info.get("quoteType", "N/A"),
-                "sector": info.get("sector", "N/A"),
-                "geography": info.get("country", "N/A"),
-                "ter": info.get("fees", info.get("expenseRatio", 0)) * 100,
-                "beta": info.get("beta"),
-                "volatility": hist['Close'].pct_change().std() * (252**0.5) * 100 # Annualized
+                "beta": t.info.get("beta", 1.0),
+                "volatility": hist['Close'].pct_change().std() * (252**0.5) * 100 or 0.0,
+                "sector": t.info.get("sector", "N/A"),
+                "geography": t.info.get("country", "N/A")
             }
             
             self.cache[symbol] = {"timestamp": now.isoformat(), "data": metrics}
