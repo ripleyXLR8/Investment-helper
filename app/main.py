@@ -10,6 +10,7 @@ load_dotenv()
 
 FINARY_EMAIL = os.getenv("FINARY_EMAIL")
 FINARY_PASSWORD = os.getenv("FINARY_PASSWORD")
+FINARY_OTP_SECRET = os.getenv("FINARY_OTP_SECRET")
 DATA_DIR = os.getenv("DATA_DIR", "/app/data")
 SCHEDULE_TIME = os.getenv("SCHEDULE_TIME", "03:00")
 
@@ -21,7 +22,7 @@ def job():
         logging.error("FINARY_EMAIL or FINARY_PASSWORD environment variables are missing!")
         return
 
-    client = FinaryClient(FINARY_EMAIL, FINARY_PASSWORD)
+    client = FinaryClient(FINARY_EMAIL, FINARY_PASSWORD, FINARY_OTP_SECRET)
     client.fetch_and_save(DATA_DIR)
 
 def main():
