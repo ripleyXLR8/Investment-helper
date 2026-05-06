@@ -15,63 +15,61 @@ load_dotenv()
 FINARY_EMAIL = os.getenv("FINARY_EMAIL")
 FINARY_PASSWORD = os.getenv("FINARY_PASSWORD")
 FINARY_OTP_SECRET = os.getenv("FINARY_OTP_SECRET")
-DATA_DIR = os.getenv("DATA_DIR", "/app/data")
 SCHEDULE_TIME = os.getenv("SCHEDULE_TIME", "03:00")
-HEARTBEAT_FILE = "/tmp/heartbeat"
+DATA_DIR = os.getenv("DATA_DIR", "/app/data")
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Configure Logging (Console + File)
+os.makedirs(DATA_DIR, exist_ok=True)
+log_file = os.path.join(DATA_DIR, "app.log")
 
-def signal_handler(sig, frame):
-    logging.info("Shutdown signal received. Exiting gracefully...")
-    sys.exit(0)
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(log_file, mode='a', encoding='utf-8')
+    ]
+)
 
-# Register signals for clean exit
-signal.signal(signal.SIGINT, signal_handler)
-signal.signal(signal.SIGTERM, signal_handler)
-
-def update_heartbeat():
-    """Updates a heartbeat file to indicate the process is alive."""
-    try:
-        with open(HEARTBEAT_FILE, "w") as f:
-            f.write(str(time.time()))
-    except Exception as e:
-        logging.error(f"Failed to update heartbeat: {e}")
+def heartbeat():
+    """Updates a heartbeat file for Docker healthcheck."""
+    with open("/tmp/heartbeat", "w") as f:
+        f.write(str(time.time()))
 
 def job():
-    logging.info("Starting daily Finary data download...")
-    if not FINARY_EMAIL or not FINARY_PASSWORD:
-        logging.error("FINARY_EMAIL or FINARY_PASSWORD environment variables are missing!")
-        return
-
+    logging.info("Starting scheduled Finary data download...")
     client = FinaryClient(FINARY_EMAIL, FINARY_PASSWORD, FINARY_OTP_SECRET)
-    client.fetch_and_save(DATA_DIR)
-    update_heartbeat()
+    if client.fetch_and_save(DATA_DIR):
+        logging.info("Scheduled download completed successfully.")
+    else:
+        logging.error("Scheduled download failed.")
 
-def run_flask():
-    """Run the Flask server."""
-    logging.info("Starting Flask dashboard on port 5000...")
-    flask_app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
-
-def main():
-    logging.info(f"Finary Downloader started. Job scheduled daily at {SCHEDULE_TIME}")
-    
-    # Start Flask server in a separate thread
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    
-    # Initial heartbeat
-    update_heartbeat()
-    
-    # Run once immediately on start
-    job()
-
-    # Schedule the job
+def run_scheduler():
     schedule.every().day.at(SCHEDULE_TIME).do(job)
-
+    logging.info(f"Finary Downloader started. Job scheduled daily at {SCHEDULE_TIME} (Level: {LOG_LEVEL})")
+    
+    # Run once at startup
+    job()
+    
     while True:
         schedule.run_pending()
-        update_heartbeat()
-        time.sleep(30)
+        heartbeat()
+        time.sleep(60)
+
+def signal_handler(sig, frame):
+    logging.info("Shutting down gracefully...")
+    sys.exit(0)
 
 if __name__ == "__main__":
-    main()
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+
+    # Start Flask in a background thread
+    logging.info("Starting Flask dashboard on port 5000...")
+    flask_thread = threading.Thread(target=lambda: flask_app.run(host="0.0.0.0", port=5000, use_reloader=False))
+    flask_thread.daemon = True
+    flask_thread.start()
+
+    # Start Scheduler in main thread
+    run_scheduler()

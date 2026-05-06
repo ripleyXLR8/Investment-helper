@@ -41,7 +41,7 @@ HTML_TEMPLATE = """
         th { text-align: left; padding: 16px 24px; background: rgba(255,255,255,0.02); color: var(--text-secondary); font-size: 0.75rem; text-transform: uppercase; }
         td { padding: 16px 24px; border-top: 1px solid var(--card-border); font-size: 0.9rem; }
         .bank-logo { width: 28px; height: 28px; border-radius: 6px; background: #fff; padding: 2px; object-fit: contain; }
-        .badge { padding: 4px 8px; border-radius: 6px; font-size: 0.65rem; font-weight: 700; text-transform: uppercase; }
+        .badge { padding: 4px 8px; border-radius: 6px; font-size: 0.65rem; font-weight: 700; text-transform: uppercase; background: rgba(56,189,248,0.1); color: var(--accent); }
         .positive { color: var(--success); } .negative { color: var(--danger); }
         .spinner { width: 14px; height: 14px; border: 2px solid rgba(0,0,0,0.2); border-top: 2px solid #000; border-radius: 50%; animation: spin 1s linear infinite; display: none; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -56,6 +56,7 @@ HTML_TEMPLATE = """
                 <div><div style="font-weight: 700;">Patrimoine Consolidé</div><div style="color: var(--text-secondary); font-size: 0.8rem;">Espaces : {% for org in organizations %}{{ org.name }}{% if not loop.last %}, {% endif %}{% endfor %}</div></div>
             </div>
             <div class="btn-group">
+                <a href="/logs" class="btn btn-secondary">📋 Logs</a>
                 <a href="/download" class="btn btn-secondary">💾 JSON</a>
                 <button id="updateBtn" class="btn btn-primary" onclick="triggerUpdate()"><span class="spinner"></span><span class="icon">🔄</span><span id="btnText">Sync Globale</span></button>
             </div>
@@ -77,12 +78,12 @@ HTML_TEMPLATE = """
                             {% if acc.logo %}
                             <img src="{{ acc.logo }}" class="bank-logo" onerror="this.style.display='none'">
                             {% else %}
-                            <div class="bank-logo" style="background: var(--secondary); display: flex; align-items: center; justify-content: center; font-size: 0.8rem;">{{ acc.name[0] }}</div>
+                            <div class="bank-logo" style="background: var(--card-border); display: flex; align-items: center; justify-content: center; font-size: 0.8rem;">{{ acc.name[0] }}</div>
                             {% endif %}
                             <div><div style="font-weight: 600;">{{ acc.name }}</div><div style="font-size: 0.75rem; color: var(--text-secondary);">{{ acc.institution }}</div></div>
                         </div>
                     </td>
-                    <td><span class="badge" style="background: rgba(56,189,248,0.1); color: var(--accent);">{{ acc.type }}</span></td>
+                    <td><span class="badge">{{ acc.type }}</span></td>
                     <td style="font-weight: 700;">{{ "{:,.2f}".format(acc.balance) }} €</td>
                     <td class="{{ 'positive' if acc.upnl >= 0 else 'negative' }}">
                         {% if acc.upnl != 0 %}
@@ -127,15 +128,11 @@ def get_financial_data():
 
         def add_acc(item, cat_name):
             if not isinstance(item, dict): return
-            
-            # Robust ID detection
             item_id = str(item.get("id") or item.get("name") or "")
             if item_id in seen_ids: return
             seen_ids.add(item_id)
             
-            # Value extraction based on asset type
             balance = item.get("balance") or item.get("current_price") or item.get("buying_price") or 0
-            # If it's a crypto, name might be quantity + symbol
             name = item.get("display_name") or item.get("name") or "Inconnu"
             if cat_name == "cryptos" and "quantity" in item:
                 name = f"{item.get('quantity')} {item.get('crypto', {}).get('symbol', '')}"
@@ -147,18 +144,15 @@ def get_financial_data():
                 else: institution = "Autre"
 
             accounts.append({
-                "name": name,
-                "institution": institution,
+                "name": name, "institution": institution,
                 "logo": item.get("logo_url") or (item.get("crypto", {}).get("logo_url") if "crypto" in item else ""),
-                "balance": float(balance),
-                "upnl": float(item.get("upnl") or 0),
+                "balance": float(balance), "upnl": float(item.get("upnl") or 0),
                 "upnl_percent": float(item.get("upnl_percent") or item.get("current_upnl_percent") or 0),
                 "type": cat_name.replace("_", " ").title()
             })
 
         for cat, items in categories.items():
-            for item in items:
-                add_acc(item, cat)
+            for item in items: add_acc(item, cat)
 
         return {
             "timestamp": format_date(raw.get("timestamp")),
@@ -166,9 +160,7 @@ def get_financial_data():
             "total_wealth": summary.get("total_amount", 0),
             "accounts": sorted(accounts, key=lambda x: x['balance'], reverse=True)
         }
-    except Exception as e:
-        logging.error(f"Error parsing data: {e}")
-        return None
+    except Exception as e: return None
 
 @app.route("/")
 def index():
@@ -194,6 +186,12 @@ def download():
     if not files: return "404", 404
     latest = max(files, key=lambda x: os.path.getmtime(os.path.join(DATA_DIR, x)))
     return send_file(os.path.join(DATA_DIR, latest), as_attachment=True)
+
+@app.route("/logs")
+def logs():
+    log_path = os.path.join(DATA_DIR, "app.log")
+    if not os.path.exists(log_path): return "Aucun log disponible", 404
+    return send_file(log_path, as_attachment=True)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
