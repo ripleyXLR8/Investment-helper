@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import threading
+from datetime import datetime, timezone
 from flask import Flask, render_template_string, jsonify, redirect, url_for, send_file
 from finary_client import FinaryClient
 
@@ -22,6 +23,25 @@ def get_item_value(item):
         item.get("buying_price") or 0
     )
 
+def calculate_annualized_perf(total_perf_percent, created_at_str):
+    if not created_at_str or total_perf_percent is None:
+        return None
+    try:
+        # Parse date (handle Z and offset formats)
+        dt_str = created_at_str.replace("Z", "+00:00")
+        created_at = datetime.fromisoformat(dt_str)
+        now = datetime.now(timezone.utc)
+        
+        diff = now - created_at
+        years = diff.days / 365.25
+        
+        if years <= 0: return None
+        
+        # Formula: ((1 + R)^(1/n)) - 1
+        return ((1 + (total_perf_percent / 100)) ** (1 / years) - 1) * 100
+    except:
+        return None
+
 def get_financial_data():
     try:
         files = [f for f in os.listdir(DATA_DIR) if f.endswith(".json")]
@@ -34,8 +54,6 @@ def get_financial_data():
         categories = summary.get("categories", {})
         accounts = []
         seen_ids = set()
-        
-        # Get current user slug to identify their share
         me_slug = raw.get("me", {}).get("result", {}).get("slug")
 
         def add_acc(item, cat_name):
@@ -44,29 +62,30 @@ def get_financial_data():
             if item_id in seen_ids: return
             seen_ids.add(item_id)
             
-            # Repartition Analysis
+            # Ownership / Shares
             owners = []
             user_share = 1.0
             repartition = item.get("ownership_repartition", [])
-            
             if repartition:
-                total_shares = sum(float(r.get("share", 0)) for r in repartition)
                 for r in repartition:
                     member = r.get("membership", {}).get("member", {})
                     name = member.get("firstname") or member.get("fullname") or "Inconnu"
                     share = float(r.get("share", 0))
                     owners.append({"name": name, "percent": int(share * 100)})
-                    # If this is the logged-in user, track their share to calculate 100% value
                     if member.get("slug") == me_slug:
                         user_share = share
 
-            # Calculate 100% Value
+            # 100% Balance
             partial_balance = get_item_value(item)
-            if user_share > 0 and user_share < 1.0:
-                # If balance seems to be the user's share (common in Finary API)
-                full_balance = partial_balance / user_share
-            else:
-                full_balance = partial_balance
+            full_balance = partial_balance / user_share if 0 < user_share < 1.0 else partial_balance
+
+            # Performance
+            upnl = float(item.get("upnl") or item.get("current_upnl") or 0)
+            upnl_pct = float(item.get("upnl_percent") or item.get("current_upnl_percent") or 0)
+            
+            # Annualized Performance
+            created_at = item.get("created_at") or item.get("opened_at")
+            annualized = calculate_annualized_perf(upnl_pct, created_at)
 
             name = item.get("display_name") or item.get("name") or "Inconnu"
             if cat_name == "cryptos" and "crypto" in item:
@@ -82,13 +101,10 @@ def get_financial_data():
                 else: institution = "Autre"
 
             accounts.append({
-                "name": name, "institution": institution,
-                "owners": owners,
+                "name": name, "institution": institution, "owners": owners,
                 "logo": item.get("logo_url") or (item.get("crypto", {}).get("logo_url") if "crypto" in item else ""),
-                "balance": float(full_balance),
-                "upnl": float(item.get("upnl") or item.get("current_upnl") or 0),
-                "upnl_percent": float(item.get("upnl_percent") or item.get("current_upnl_percent") or 0),
-                "type": cat_name.replace("_", " ").title()
+                "balance": float(full_balance), "upnl": upnl, "upnl_percent": upnl_pct,
+                "annualized_perf": annualized, "type": cat_name.replace("_", " ").title()
             })
 
         for cat, items in categories.items():
@@ -149,8 +165,8 @@ HTML_TEMPLATE = """
     <div class="container">
         <header>
             <div style="display: flex; align-items: center; gap: 15px;">
-                <div style="width: 48px; height: 48px; background: linear-gradient(135deg, var(--accent), #818cf8); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 1.5rem;">🏘️</div>
-                <div><div style="font-weight: 700; font-size: 1.2rem;">Finary Family Dashboard</div><div style="color: var(--text-secondary); font-size: 0.8rem;">Vue consolidée à 100%</div></div>
+                <div style="width: 48px; height: 48px; background: linear-gradient(135deg, var(--accent), #818cf8); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 1.5rem;">📈</div>
+                <div><div style="font-weight: 700; font-size: 1.2rem;">Finary Family Dashboard</div><div style="color: var(--text-secondary); font-size: 0.8rem;">Performance & Analyse Patrimoniale</div></div>
             </div>
             <div class="btn-group">
                 <a href="/logs" class="btn btn-secondary">📋 Logs</a>
@@ -166,7 +182,7 @@ HTML_TEMPLATE = """
         </div>
 
         <table>
-            <thead><tr><th>Actif / Institution</th><th>Catégorie</th><th>Valeur (100%)</th><th>Performance</th></tr></thead>
+            <thead><tr><th>Actif / Institution</th><th>Catégorie</th><th>Valeur (100%)</th><th>Perf. Totale</th><th>Perf. Annualisée</th></tr></thead>
             <tbody>
                 {% for acc in accounts %}
                 <tr>
@@ -196,6 +212,11 @@ HTML_TEMPLATE = """
                         {% if acc.upnl != 0 %}
                         <div style="font-weight: 600;">{{ "+" if acc.upnl >= 0 }}{{ "{:,.2f}".format(acc.upnl) }} €</div>
                         <div style="font-size: 0.75rem;">({{ "{:.2f}".format(acc.upnl_percent) }}%)</div>
+                        {% else %}-{% endif %}
+                    </td>
+                    <td style="font-weight: 700; font-size: 1rem;" class="{{ 'positive' if acc.annualized_perf and acc.annualized_perf >= 0 else 'negative' }}">
+                        {% if acc.annualized_perf is not none %}
+                        {{ "{:+.2f}".format(acc.annualized_perf) }} % / an
                         {% else %}-{% endif %}
                     </td>
                 </tr>
