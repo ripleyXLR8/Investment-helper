@@ -117,14 +117,23 @@ class FinancialEnricher:
 
         logging.debug(f"      Requesting yfinance for {query}...")
         try:
+            # 1. Try as a direct ticker/ISIN
             ticker = yf.Ticker(query)
             hist = ticker.history(period="1y")
             
-            # Fallback search if direct ticker/ISIN fails
-            if hist.empty and len(query) > 5:
-                search = yf.Search(query, max_results=1).results
-                if search:
-                    best_ticker = search[0]['symbol']
+            # 2. If it's a long string (name) or no data found, try a search
+            if hist.empty or len(query.split()) > 1:
+                search_query = query
+                logging.debug(f"      Searching for: {search_query}")
+                search = yf.Search(search_query, max_results=3)
+                
+                # Handling different yfinance versions for Search results
+                results = []
+                if hasattr(search, 'quotes'): results = search.quotes
+                elif hasattr(search, 'results'): results = search.results
+                
+                if results:
+                    best_ticker = results[0].get('symbol')
                     logging.info(f"      Found fallback ticker {best_ticker} for {query}")
                     ticker = yf.Ticker(best_ticker)
                     hist = ticker.history(period="1y")
