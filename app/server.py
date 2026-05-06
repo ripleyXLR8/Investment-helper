@@ -13,6 +13,84 @@ FINARY_OTP_SECRET = os.getenv("FINARY_OTP_SECRET")
 
 is_updating = False
 
+# HTML template remains mostly the same, but we ensure values are handled correctly.
+# (I'll keep the template short in this write_to_file but ensure logic is solid)
+
+def get_item_value(item):
+    if not isinstance(item, dict): return 0
+    return (
+        item.get("balance") or 
+        item.get("current_value") or 
+        item.get("current_price") or 
+        item.get("buying_price") or 0
+    )
+
+def get_financial_data():
+    try:
+        files = [f for f in os.listdir(DATA_DIR) if f.endswith(".json")]
+        if not files: return None
+        latest_file = max(files, key=lambda x: os.path.getmtime(os.path.join(DATA_DIR, x)))
+        with open(os.path.join(DATA_DIR, latest_file), "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        
+        summary = raw.get("portfolio_summary", {})
+        categories = summary.get("categories", {})
+        accounts = []
+        seen_ids = set()
+
+        def add_acc(item, cat_name):
+            if not isinstance(item, dict): return
+            # Better ID detection to avoid duplicates across Personal/Family views
+            item_id = str(item.get("id") or item.get("slug") or item.get("name") or "")
+            if item_id in seen_ids: return
+            seen_ids.add(item_id)
+            
+            balance = get_item_value(item)
+            name = item.get("display_name") or item.get("name") or "Inconnu"
+            
+            # Crypto specific name formatting
+            if cat_name == "cryptos" and "crypto" in item:
+                crypto_info = item.get("crypto", {})
+                symbol = crypto_info.get("symbol", "")
+                quantity = item.get("quantity")
+                if quantity:
+                    name = f"{quantity} {symbol}" if symbol else f"{quantity} Crypto"
+                elif not name or name == "Inconnu":
+                    name = crypto_info.get("name") or symbol or "Crypto"
+
+            institution = item.get("bank", {}).get("name") or item.get("institution_name") or ""
+            if not institution:
+                if cat_name == "real_estates": institution = "Immobilier"
+                elif cat_name == "cryptos": institution = item.get("crypto", {}).get("name", "Portefeuille Crypto")
+                else: institution = "Autre"
+
+            accounts.append({
+                "name": name, "institution": institution,
+                "logo": item.get("logo_url") or (item.get("crypto", {}).get("logo_url") if "crypto" in item else ""),
+                "balance": float(balance), 
+                "upnl": float(item.get("upnl") or item.get("current_upnl") or 0),
+                "upnl_percent": float(item.get("upnl_percent") or item.get("current_upnl_percent") or 0),
+                "type": cat_name.replace("_", " ").title()
+            })
+
+        for cat, items in categories.items():
+            if isinstance(items, list):
+                for item in items: add_acc(item, cat)
+
+        return {
+            "timestamp": raw.get("timestamp"), # Dashboard format_date handles it
+            "organizations": raw.get("organizations", []),
+            "total_wealth": summary.get("total_amount", 0),
+            "accounts": sorted(accounts, key=lambda x: x['balance'], reverse=True)
+        }
+    except Exception as e:
+        logging.error(f"Error parsing financial data: {e}")
+        return None
+
+# Rest of the file (HTML_TEMPLATE and routes) remains the same as previous version
+# I'll just include the full content to be safe and ensure everything is updated.
+
+# [REUSE HTML_TEMPLATE from previous turn]
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="fr">
@@ -53,7 +131,7 @@ HTML_TEMPLATE = """
         <header>
             <div style="display: flex; align-items: center; gap: 15px;">
                 <div style="width: 48px; height: 48px; background: linear-gradient(135deg, var(--accent), #818cf8); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-weight: 700;">👪</div>
-                <div><div style="font-weight: 700;">Patrimoine Consolidé</div><div style="color: var(--text-secondary); font-size: 0.8rem;">Espaces : {% for org in organizations %}{{ org.name }}{% if not loop.last %}, {% endif %}{% endfor %}</div></div>
+                <div><div style="font-weight: 700;">Patrimoine Consolidé</div><div style="color: var(--text-secondary); font-size: 0.8rem;">Espaces : {% for org in organizations %}{{ org.name or "Famille" }}{% if not loop.last %}, {% endif %}{% endfor %}</div></div>
             </div>
             <div class="btn-group">
                 <a href="/logs" class="btn btn-secondary">📋 Logs</a>
@@ -65,7 +143,7 @@ HTML_TEMPLATE = """
         <div class="summary-grid">
             <div class="card"><span class="card-label">Patrimoine Brut</span><span class="card-value">{{ "{:,.2f}".format(total_wealth) }} €</span></div>
             <div class="card"><span class="card-label">Actifs répertoriés</span><span class="card-value">{{ accounts|length }}</span></div>
-            <div class="card"><span class="card-label">Dernière Sync</span><span class="card-value" style="font-size: 1.2rem; margin-top: 10px;">{{ timestamp }}</span></div>
+            <div class="card"><span class="card-label">Dernière Sync</span><span class="card-value" style="font-size: 1.2rem; margin-top: 10px;">{{ timestamp|format_date }}</span></div>
         </div>
 
         <table>
@@ -105,62 +183,14 @@ HTML_TEMPLATE = """
 </html>
 """
 
-def format_date(date_str):
+@app.template_filter('format_date')
+def format_date_filter(date_str):
     if not date_str: return "N/A"
     try:
         from datetime import datetime
         dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
         return dt.strftime("%d/%m/%Y %H:%M")
     except: return date_str
-
-def get_financial_data():
-    try:
-        files = [f for f in os.listdir(DATA_DIR) if f.endswith(".json")]
-        if not files: return None
-        latest_file = max(files, key=lambda x: os.path.getmtime(os.path.join(DATA_DIR, x)))
-        with open(os.path.join(DATA_DIR, latest_file), "r", encoding="utf-8") as f:
-            raw = json.load(f)
-        
-        summary = raw.get("portfolio_summary", {})
-        categories = summary.get("categories", {})
-        accounts = []
-        seen_ids = set()
-
-        def add_acc(item, cat_name):
-            if not isinstance(item, dict): return
-            item_id = str(item.get("id") or item.get("name") or "")
-            if item_id in seen_ids: return
-            seen_ids.add(item_id)
-            
-            balance = item.get("balance") or item.get("current_price") or item.get("buying_price") or 0
-            name = item.get("display_name") or item.get("name") or "Inconnu"
-            if cat_name == "cryptos" and "quantity" in item:
-                name = f"{item.get('quantity')} {item.get('crypto', {}).get('symbol', '')}"
-
-            institution = item.get("bank", {}).get("name") or item.get("institution_name") or ""
-            if not institution:
-                if cat_name == "real_estates": institution = "Immobilier"
-                elif cat_name == "cryptos": institution = item.get("crypto", {}).get("name", "Portefeuille Crypto")
-                else: institution = "Autre"
-
-            accounts.append({
-                "name": name, "institution": institution,
-                "logo": item.get("logo_url") or (item.get("crypto", {}).get("logo_url") if "crypto" in item else ""),
-                "balance": float(balance), "upnl": float(item.get("upnl") or 0),
-                "upnl_percent": float(item.get("upnl_percent") or item.get("current_upnl_percent") or 0),
-                "type": cat_name.replace("_", " ").title()
-            })
-
-        for cat, items in categories.items():
-            for item in items: add_acc(item, cat)
-
-        return {
-            "timestamp": format_date(raw.get("timestamp")),
-            "organizations": raw.get("organizations", []),
-            "total_wealth": summary.get("total_amount", 0),
-            "accounts": sorted(accounts, key=lambda x: x['balance'], reverse=True)
-        }
-    except Exception as e: return None
 
 @app.route("/")
 def index():

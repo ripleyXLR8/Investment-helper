@@ -15,8 +15,6 @@ from finary_uapi.user_organizations import (
     get_organization_real_estates
 )
 
-# No basicConfig here, it's handled by main.py
-
 class FinaryClient:
     def __init__(self, email, password, otp_secret=None):
         self.email = email
@@ -38,10 +36,21 @@ class FinaryClient:
         try:
             signin(otp_code=otp_code)
             self.session = prepare_session()
+            logging.debug("Sign in successful!")
             return True
         except Exception as e:
             logging.error(f"Authentication failed: {e}")
             return False
+
+    def _get_item_value(self, item):
+        """Helper to extract value from any type of Finary asset."""
+        if not isinstance(item, dict): return 0
+        return (
+            item.get("balance") or 
+            item.get("current_value") or 
+            item.get("current_price") or 
+            item.get("buying_price") or 0
+        )
 
     def fetch_and_save(self, output_dir):
         if not self.login():
@@ -70,7 +79,14 @@ class FinaryClient:
                     data = res.get("result", {}) if isinstance(res, dict) else {}
                     items = self._extract_items(cat, data)
                     all_assets[cat].extend(items)
-                    total_wealth += data.get("total", {}).get("amount", 0) if isinstance(data, dict) else 0
+                    
+                    # Calculate total from items if summary is missing
+                    cat_total = data.get("total", {}).get("amount") if isinstance(data, dict) else None
+                    if cat_total is None:
+                        cat_total = sum(self._get_item_value(i) for i in items)
+                    
+                    total_wealth += cat_total
+                    logging.debug(f"  - Personal {cat}: {len(items)} items found (Total: {cat_total}€)")
                 except Exception as e:
                     logging.debug(f"Skipping personal {cat}: {e}")
 
@@ -78,7 +94,7 @@ class FinaryClient:
             for org in organizations:
                 if not isinstance(org, dict): continue
                 org_id = org.get("id")
-                org_name = org.get("name")
+                org_name = org.get("name") or "Sans nom"
                 logging.info(f"Fetching assets for organization: {org_name} ({org_id})...")
                 
                 org_funcs = {
@@ -92,20 +108,25 @@ class FinaryClient:
                 for cat, func in org_funcs.items():
                     try:
                         res = func(self.session, org_id)
+                        items = []
                         if isinstance(res, list):
                             items = res
-                            for item in items:
-                                total_wealth += item.get("balance", 0) if isinstance(item, dict) else 0
                         elif isinstance(res, dict):
                             data = res.get("result", res)
-                            items = self._extract_items(cat, data)
-                            total_wealth += data.get("total", {}).get("amount", 0) if isinstance(data, dict) and "total" in data else 0
-                        else:
-                            items = []
+                            items = self._extract_items(cat, data) if isinstance(data, dict) else []
                         
-                        all_assets[cat].extend(items)
+                        if items:
+                            all_assets[cat].extend(items)
+                            org_cat_total = sum(self._get_item_value(i) for i in items)
+                            total_wealth += org_cat_total
+                            logging.info(f"  - Org {org_name} | {cat}: {len(items)} items found (Total: {org_cat_total}€)")
+                        else:
+                            logging.debug(f"  - Org {org_name} | {cat}: No items found")
+                            
                     except Exception as e:
                         logging.warning(f"Error fetching {cat} for org {org_name}: {e}")
+
+            logging.info(f"Final Aggregated Wealth: {total_wealth}€")
 
             data = {
                 "timestamp": datetime.datetime.now().isoformat(),
@@ -126,14 +147,17 @@ class FinaryClient:
             logging.info(f"Consolidated data saved to {filepath}")
             return True
         except Exception as e:
-            logging.error(f"Global Error: {e}")
+            logging.error(f"Global Error during fetch: {e}")
             return False
 
     def _extract_items(self, category, data):
         if not isinstance(data, dict): return []
-        if category == "investments": return data.get("accounts", [])
-        if category == "cryptos": return data.get("cryptos", [])
-        if category == "fonds_euro": return data.get("fonds_euro", [])
-        if category == "scpis": return data.get("scpis", [])
-        if category == "real_estates": return data.get("real_estates", [])
-        return []
+        # Try different possible keys from Finary API
+        return (
+            data.get("accounts") or 
+            data.get("cryptos") or 
+            data.get("fonds_euro") or 
+            data.get("scpis") or 
+            data.get("real_estates") or 
+            data.get("result") or []
+        )
