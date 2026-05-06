@@ -1,6 +1,7 @@
 finary-uapi
-schedule
-python-dotenv
-requests
 pyotp
-Flask
+flask
+schedule
+yfinance
+pandas
+requests
