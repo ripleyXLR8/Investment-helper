@@ -86,7 +86,6 @@ def get_financial_data():
             name = item.get("display_name") or item.get("name") or "Inconnu"
             institution = item.get("bank", {}).get("name") or item.get("institution_name") or ""
             
-            # Sub-elements (Securities or Loans)
             subs = []
             if cat_name == "investments":
                 for s in item.get("securities", []):
@@ -95,6 +94,8 @@ def get_financial_data():
                         "name": sec_info.get("name"),
                         "detail": sec_info.get("isin"),
                         "quantity": s.get("quantity"),
+                        "pru": s.get("buying_price"),
+                        "unit_price": sec_info.get("current_price"),
                         "value": s.get("current_value"),
                         "perf": s.get("current_upnl_percent")
                     })
@@ -104,6 +105,8 @@ def get_financial_data():
                         "name": f"Emprunt: {l.get('name')}",
                         "detail": "Passif",
                         "quantity": None,
+                        "pru": None,
+                        "unit_price": None,
                         "value": -float(l.get("balance", 0)),
                         "perf": None
                     })
@@ -162,8 +165,11 @@ HTML_TEMPLATE = """
         table { width: 100%; border-collapse: collapse; }
         th { text-align: left; padding: 16px 24px; background: rgba(255,255,255,0.02); color: var(--text-secondary); font-size: 0.75rem; text-transform: uppercase; }
         td { padding: 16px 24px; border-top: 1px solid var(--card-border); font-size: 0.9rem; }
-        .sub-table { width: 100%; background: rgba(0,0,0,0.15); font-size: 0.8rem; }
+        
+        .sub-table { width: 100%; background: rgba(0,0,0,0.2); font-size: 0.75rem; }
+        .sub-table th { background: transparent; padding: 8px 24px; border: none; color: #6366f1; font-size: 0.65rem; }
         .sub-table td { padding: 8px 24px; border-top: 1px solid rgba(255,255,255,0.03); color: #cbd5e1; }
+        
         .positive { color: var(--success); } .negative { color: var(--danger); }
         .bank-logo { width: 32px; height: 32px; border-radius: 8px; background: #fff; padding: 2px; object-fit: contain; }
         .owner-tag { font-size: 0.7rem; color: var(--text-secondary); margin-top: 4px; }
@@ -174,8 +180,8 @@ HTML_TEMPLATE = """
     <div class="container">
         <header>
             <div style="display: flex; align-items: center; gap: 15px;">
-                <div style="width: 48px; height: 48px; background: var(--accent); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.5rem;">💎</div>
-                <div><div style="font-weight: 700; font-size: 1.2rem;">Finary Family Dashboard</div><div style="color: var(--text-secondary); font-size: 0.8rem;">Vue consolidée à 100%</div></div>
+                <div style="width: 48px; height: 48px; background: var(--accent); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.5rem;">📊</div>
+                <div><div style="font-weight: 700; font-size: 1.2rem;">Finary Family Dashboard</div><div style="color: var(--text-secondary); font-size: 0.8rem;">Détails & Performances</div></div>
             </div>
             <div style="display: flex; gap: 10px;">
                 <a href="/logs" class="btn btn-secondary">📋 Logs</a>
@@ -186,7 +192,7 @@ HTML_TEMPLATE = """
         <div class="summary-box">
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
-                    <div style="color: var(--text-secondary); font-size: 0.85rem;">Patrimoine Total Brut</div>
+                    <div style="color: var(--text-secondary); font-size: 0.85rem;">Patrimoine Total Consolidé</div>
                     <div style="font-size: 2.2rem; font-weight: 800;">{{ "{:,.2f}".format(total_wealth) }} €</div>
                 </div>
                 <div style="text-align: right;">
@@ -207,10 +213,10 @@ HTML_TEMPLATE = """
             <table>
                 <thead>
                     <tr>
-                        <th style="width: 40%;">Actif</th>
+                        <th style="width: 35%;">Actif Principal</th>
                         <th style="width: 20%;">Valeur</th>
-                        <th style="width: 20%;">Perf. Totale</th>
-                        <th style="width: 20%;">Annuelle</th>
+                        <th style="width: 25%;">Perf. Totale</th>
+                        <th style="width: 20%;">Annualisée</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -230,7 +236,7 @@ HTML_TEMPLATE = """
                         </td>
                         <td style="font-weight: 700;">{{ "{:,.2f}".format(acc.balance) }} €</td>
                         <td class="{{ 'positive' if acc.upnl >= 0 else 'negative' }}">
-                            <div style="font-weight: 600;">{{ "{:+.2f}".format(acc.upnl_percent) }}%</div>
+                            <div style="font-weight: 600;">{{ "{:+.2f}".format(acc.upnl) }} € ({{ "{:+.2f}%".format(acc.upnl_percent) }})</div>
                         </td>
                         <td style="font-weight: 600;" class="{{ 'positive' if acc.annualized_perf and acc.annualized_perf >= 0 else 'negative' }}">
                             {% if acc.annualized_perf is not none %}{{ "{:+.2f}".format(acc.annualized_perf) }}%{% else %}-{% endif %}
@@ -241,19 +247,32 @@ HTML_TEMPLATE = """
                     <tr>
                         <td colspan="4" style="padding: 0; border: none;">
                             <table class="sub-table">
-                                {% for s in acc.subs %}
-                                <tr>
-                                    <td style="width: 40%; padding-left: 68px;">
-                                        <div style="font-weight: 600; {{ 'color: #fca5a5;' if s.value < 0 else '' }}">{{ s.name }}</div>
-                                        <div style="font-size: 0.65rem; color: #64748b;">{{ s.detail or "" }}</div>
-                                    </td>
-                                    <td style="width: 20%; font-weight: 600;">{{ "{:,.2f}".format(s.value) }} €</td>
-                                    <td style="width: 20%;" class="{{ 'positive' if s.perf and s.perf >= 0 else 'negative' }}">
-                                        {{ "{:+.2f}%".format(s.perf) if s.perf is not none else "" }}
-                                    </td>
-                                    <td style="width: 20%;"></td>
-                                </tr>
-                                {% endfor %}
+                                <thead>
+                                    <tr>
+                                        <th style="width: 35%; padding-left: 68px;">Ligne / Valeur</th>
+                                        <th style="width: 15%;">Qté</th>
+                                        <th style="width: 15%;">PRU</th>
+                                        <th style="width: 15%;">Cours</th>
+                                        <th style="width: 20%;">Valeur / Perf.</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for s in acc.subs %}
+                                    <tr>
+                                        <td style="padding-left: 68px;">
+                                            <div style="font-weight: 700; {{ 'color: #fca5a5;' if s.value < 0 else '' }}">{{ s.name }}</div>
+                                            <div style="font-size: 0.6rem; color: #64748b;">{{ s.detail or "" }}</div>
+                                        </td>
+                                        <td>{{ "{:,.4f}".format(s.quantity) if s.quantity is not none else "-" }}</td>
+                                        <td style="color: var(--text-secondary);">{{ "{:,.2f}".format(s.pru) if s.pru is not none else "-" }} €</td>
+                                        <td style="font-weight: 600;">{{ "{:,.2f}".format(s.unit_price) if s.unit_price is not none else "-" }} €</td>
+                                        <td class="{{ 'positive' if s.perf and s.perf >= 0 else 'negative' }}">
+                                            <div style="font-weight: 700; color: var(--text-primary);">{{ "{:,.2f}".format(s.value) }} €</div>
+                                            <div style="font-size: 0.7rem;">{{ "{:+.2f}%".format(s.perf) if s.perf is not none else "" }}</div>
+                                        </td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
                             </table>
                         </td>
                     </tr>
