@@ -12,6 +12,16 @@ class FinancialEnricher:
         self.cache_file = os.path.join(self.data_dir, "yfinance_cache.json")
         self.cache = self._load_cache()
         self.llm = LLMMapper()
+        # Hardcoded overrides for peace of mind
+        self.manual_mapping = {
+            "Plan d'Epargne France du Groupe Air Liquide": "AI.PA",
+            "AirLiquide - MyShare": "AI.PA",
+            "AirLiquide - Performance Share": "AI.PA",
+            "PEA - Bourse Direct": "CW8.PA",
+            "Ledger ETHER": "ETH-USD",
+            "Ledger BITCOIN": "BTC-USD",
+            "Trade Republic": "DBX0AN.PA"
+        }
 
     def _load_cache(self):
         if os.path.exists(self.cache_file):
@@ -28,37 +38,37 @@ class FinancialEnricher:
 
     def get_ticker(self, item):
         sec = item.get("security", {}) or {}
-        isin = item.get("isin") or sec.get("isin")
-        symbol = item.get("symbol") or sec.get("symbol")
         name = item.get("name") or sec.get("name")
         
-        # 1. Crypto handling
+        # Priority 1: Manual Mapping
+        if name in self.manual_mapping:
+            return self.manual_mapping[name]
+
+        # Priority 2: Crypto handling
+        isin = item.get("isin") or sec.get("isin")
+        symbol = item.get("symbol") or sec.get("symbol")
         if "crypto" in item or item.get("asset_class") == "crypto":
             sym = symbol or item.get("crypto", {}).get("symbol")
             return f"{sym}-USD" if sym else name
 
-        # 2. Priority to ISIN
+        # Priority 3: ISIN
         if isin and len(isin) == 12:
             return isin
         
-        # 3. Use name as last resort for LLM/Search
         return name
 
     def enrich(self, data):
         logging.info("--- STARTING FINANCIAL ENRICHMENT ---")
-        
         categories = data.get("portfolio_summary", {}).get("categories", {})
         
-        # Collect all unique asset names first to batch them for LLM if needed
         all_assets = []
         for cat in ['investments', 'cryptos', 'real_estates']:
             if cat in categories:
                 for item in categories[cat]:
                     ticker = self.get_ticker(item)
-                    if ticker:
+                    if ticker and ticker not in self.manual_mapping.values():
                         all_assets.append(ticker)
         
-        # Ask LLM to pre-resolve everything unknown
         if all_assets:
             self.llm.resolve_tickers(list(set(all_assets)))
 
@@ -77,11 +87,8 @@ class FinancialEnricher:
     def _fetch_metrics(self, ticker_name):
         if not ticker_name: return self._get_default_metrics()
         
-        # Resolve using LLM Mapping first
         resolved_ticker = self.llm.mapping.get(ticker_name, ticker_name)
-        
-        if resolved_ticker == "CASH":
-            return self._get_default_metrics()
+        if resolved_ticker == "CASH": return self._get_default_metrics()
 
         now = datetime.now()
         if resolved_ticker in self.cache:
@@ -96,18 +103,11 @@ class FinancialEnricher:
             t = yf.Ticker(resolved_ticker)
             hist = t.history(period="2y")
             
-            # If empty, try one last time with a search if it was a name
-            if hist.empty and (" " in resolved_ticker or len(resolved_ticker) > 10):
-                search = yf.Search(resolved_ticker, max_results=1)
-                results = getattr(search, 'quotes', getattr(search, 'results', []))
-                if results:
-                    resolved_ticker = results[0]['symbol']
-                    t = yf.Ticker(resolved_ticker)
-                    hist = t.history(period="2y")
-
             if hist.empty:
                 return self._get_default_metrics()
 
+            # FIX: Remove timezone info to allow comparison with 'now'
+            hist.index = hist.index.tz_localize(None)
             current_price = hist['Close'].iloc[-1]
             
             def get_perf(days):
@@ -117,8 +117,8 @@ class FinancialEnricher:
                 return ((current_price / old_price) - 1) * 100 if old_price != 0 else 0
 
             # YTD calculation
-            year_start = datetime(now.year, 1, 1).date()
-            ytd_idx = hist.index.get_indexer([pd.Timestamp(year_start)], method='nearest')[0]
+            year_start = datetime(now.year, 1, 1)
+            ytd_idx = hist.index.get_indexer([year_start], method='nearest')[0]
             ytd_price = hist['Close'].iloc[ytd_idx]
             
             high_52w = hist['High'].iloc[-252:].max() if len(hist) > 0 else 0
