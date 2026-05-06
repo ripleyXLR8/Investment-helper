@@ -33,6 +33,7 @@ def get_financial_data():
         }
         
         seen_ids = set()
+        total_assets_count = 0
 
         def parse_item(item, cat_name):
             if not isinstance(item, dict): return None
@@ -69,7 +70,6 @@ def get_financial_data():
                         "unit_price": sec_info.get("current_price"),
                         "value": s.get("current_value"),
                         "perf": s.get("current_upnl_percent"),
-                        # Enriched fields
                         "perf_1m": s.get("perf_1m"), "perf_3m": s.get("perf_3m"), "perf_1y": s.get("perf_1y"), "perf_ytd": s.get("perf_ytd"),
                         "beta": s.get("beta"), "volatility": s.get("volatility"),
                         "sector": s.get("sector"), "geography": s.get("geography"),
@@ -104,6 +104,7 @@ def get_financial_data():
                     if parsed:
                         groups[display_cat]["assets"].append(parsed)
                         groups[display_cat]["total"] += parsed["balance"]
+                        total_assets_count += 1
 
         for g in groups.values():
             g["assets"].sort(key=lambda x: x["balance"], reverse=True)
@@ -111,6 +112,7 @@ def get_financial_data():
         return {
             "timestamp": raw.get("timestamp"),
             "total_wealth": summary.get("total_amount", 0),
+            "total_assets_count": total_assets_count,
             "groups": groups
         }
     except Exception as e:
@@ -123,8 +125,8 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Finary Advanced Analytics</title>
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <title>Finary Family Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
         :root {
             --bg: #030712; --card-bg: #111827; --card-border: #1f2937;
@@ -132,73 +134,103 @@ HTML_TEMPLATE = """
         }
         body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: var(--bg); color: var(--text-primary); margin: 0; padding: 0; }
         .container { max-width: 1400px; margin: 0 auto; padding: 40px 20px; }
-        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
-        .section-header { display: flex; justify-content: space-between; align-items: baseline; margin: 40px 0 15px 0; border-left: 4px solid var(--accent); padding-left: 15px; }
-        .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 20px; overflow: hidden; margin-bottom: 25px; }
+        
+        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 40px; }
+        .btn-group { display: flex; gap: 10px; align-items: center; }
+        .btn { border: none; padding: 10px 18px; border-radius: 12px; font-weight: 700; font-size: 0.85rem; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 8px; text-decoration: none; }
+        .btn-primary { background: var(--accent); color: #000; }
+        .btn-secondary { background: #1f2937; color: var(--text-primary); }
+        
+        .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 40px; }
+        .summary-card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 24px; padding: 25px; border: 1px solid rgba(255,255,255,0.05); }
+        .card-label { color: var(--text-secondary); font-size: 0.85rem; font-weight: 500; margin-bottom: 8px; display: block; }
+        .card-value { font-size: 2rem; font-weight: 800; display: block; }
+        
+        .section-header { display: flex; justify-content: space-between; align-items: baseline; margin: 50px 0 20px 0; border-left: 4px solid var(--accent); padding-left: 15px; }
+        .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 24px; overflow: hidden; margin-bottom: 30px; }
         table { width: 100%; border-collapse: collapse; }
-        th { text-align: left; padding: 12px 20px; background: rgba(255,255,255,0.02); color: var(--text-secondary); font-size: 0.7rem; text-transform: uppercase; }
-        td { padding: 12px 20px; border-top: 1px solid var(--card-border); font-size: 0.85rem; vertical-align: top; }
+        th { text-align: left; padding: 16px 20px; background: rgba(255,255,255,0.02); color: var(--text-secondary); font-size: 0.7rem; text-transform: uppercase; }
+        td { padding: 16px 20px; border-top: 1px solid var(--card-border); font-size: 0.85rem; vertical-align: top; }
         
         .sub-table { width: 100%; background: rgba(0,0,0,0.25); border-top: 2px solid var(--accent); }
         .sub-row { border-bottom: 1px solid rgba(255,255,255,0.05); }
-        .metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 8px; font-size: 0.75rem; }
-        .metric-item { background: rgba(255,255,255,0.03); padding: 5px 8px; border-radius: 6px; }
-        .metric-label { color: var(--text-secondary); font-size: 0.65rem; display: block; }
+        .metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 10px; font-size: 0.75rem; }
+        .metric-item { background: rgba(255,255,255,0.03); padding: 8px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05); }
+        .metric-label { color: var(--text-secondary); font-size: 0.6rem; display: block; margin-bottom: 2px; }
         
-        .tag-badge { font-size: 0.6rem; padding: 2px 6px; border-radius: 4px; font-weight: 700; text-transform: uppercase; background: #374151; color: #d1d5db; }
-        .tag-core { background: rgba(16,185,129,0.1); color: #10b981; }
-        .tag-spec { background: rgba(239,68,68,0.1); color: #ef4444; }
+        .tag-badge { font-size: 0.6rem; padding: 2px 8px; border-radius: 6px; font-weight: 800; text-transform: uppercase; background: #374151; color: #d1d5db; }
+        .tag-core { background: rgba(16,185,129,0.1); color: #10b981; border: 1px solid rgba(16,185,129,0.2); }
+        .tag-spec { background: rgba(239,68,68,0.1); color: #ef4444; border: 1px solid rgba(239,68,68,0.2); }
         
         .positive { color: var(--success); } .negative { color: var(--danger); }
-        .bank-logo { width: 28px; height: 28px; border-radius: 6px; background: #fff; padding: 2px; }
+        .bank-logo { width: 32px; height: 32px; border-radius: 8px; background: #fff; padding: 2px; object-fit: contain; }
     </style>
 </head>
 <body>
     <div class="container">
         <header>
             <div style="display: flex; align-items: center; gap: 15px;">
-                <div style="font-size: 2rem;">🚀</div>
-                <div><div style="font-weight: 800; font-size: 1.5rem;">Advanced Analytics</div><div style="color: var(--text-secondary); font-size: 0.8rem;">Momentum & Risk Engine Active</div></div>
+                <div style="font-size: 2.2rem;">🏢</div>
+                <div><div style="font-weight: 800; font-size: 1.6rem;">Finary Family Dashboard</div><div style="color: var(--text-secondary); font-size: 0.8rem;">Analyse Patrimoniale & Marchés</div></div>
             </div>
-            <div style="display: flex; gap: 10px;">
-                <button class="btn btn-secondary" onclick="window.location.reload()">🔄 Refresh</button>
+            <div class="btn-group">
+                <a href="/logs" class="btn btn-secondary">📋 Logs</a>
+                <a href="/download" class="btn btn-secondary">💾 JSON</a>
                 <button class="btn btn-primary" onclick="triggerUpdate()">⚡ Sync Data</button>
             </div>
         </header>
 
+        <div class="summary-grid">
+            <div class="summary-card">
+                <span class="card-label">Patrimoine Brut (100%)</span>
+                <span class="card-value">{{ "{:,.2f}".format(total_wealth) }} €</span>
+            </div>
+            <div class="summary-card">
+                <span class="card-label">Actifs Répertoriés</span>
+                <span class="card-value">{{ total_assets_count }}</span>
+            </div>
+            <div class="summary-card">
+                <span class="card-label">Dernière Synchronisation</span>
+                <span class="card-value" style="font-size: 1.4rem; margin-top: 10px; color: var(--accent);">{{ timestamp|format_date }}</span>
+            </div>
+        </div>
+
         {% for g_name, g_data in groups.items() %}
         {% if g_data.assets %}
         <div class="section-header">
-            <span style="font-size: 1.4rem; font-weight: 800;">{{ g_name }}</span>
-            <span style="color: var(--accent); font-weight: 700;">{{ "{:,.0f}".format(g_data.total) }} €</span>
+            <span style="font-size: 1.5rem; font-weight: 800;">{{ g_name }}</span>
+            <span style="color: var(--accent); font-weight: 700; font-size: 1.2rem;">{{ "{:,.0f}".format(g_data.total) }} €</span>
         </div>
         
         <div class="card">
             <table>
                 <thead>
                     <tr>
-                        <th style="width: 40%;">Actif / Enveloppe</th>
+                        <th style="width: 40%;">Actif / Institution</th>
                         <th style="width: 15%;">Valeur</th>
                         <th style="width: 15%;">Poids Global</th>
-                        <th style="width: 15%;">Perf. Totale</th>
-                        <th style="width: 15%;">Type</th>
+                        <th style="width: 15%;">Performance</th>
+                        <th style="width: 15%;">Catégorie</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for acc in g_data.assets %}
                     <tr>
                         <td>
-                            <div style="display: flex; align-items: center; gap: 12px;">
-                                {% if acc.logo %}<img src="{{ acc.logo }}" class="bank-logo">{% else %}<div class="bank-logo" style="background: #334155;"></div>{% endif %}
+                            <div style="display: flex; align-items: center; gap: 15px;">
+                                {% if acc.logo %}<img src="{{ acc.logo }}" class="bank-logo">{% else %}<div class="bank-logo" style="background: #334155; display: flex; align-items: center; justify-content: center; font-weight: 800; color: var(--accent);">{{ acc.name[0] }}</div>{% endif %}
                                 <div>
-                                    <div style="font-weight: 700;">{{ acc.name }}</div>
-                                    <div style="font-size: 0.7rem; color: var(--text-secondary);">{{ acc.institution }}</div>
+                                    <div style="font-weight: 700; font-size: 1rem;">{{ acc.name }}</div>
+                                    <div style="font-size: 0.75rem; color: var(--text-secondary);">{{ acc.institution }}</div>
+                                    <div style="display: flex; gap: 10px; margin-top: 5px;">
+                                        {% for o in acc.owners %}<span style="font-size: 0.65rem; background: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px; color: var(--text-secondary);">👤 {{ o.name }} {{ o.percent }}%</span>{% endfor %}
+                                    </div>
                                 </div>
                             </div>
                         </td>
-                        <td style="font-weight: 700;">{{ "{:,.2f}".format(acc.balance) }} €</td>
-                        <td style="font-weight: 600; color: var(--accent);">{{ "{:.1f}".format(acc.weight_global or 0) }}%</td>
-                        <td class="{{ 'positive' if acc.upnl_percent >= 0 else 'negative' }}" style="font-weight: 700;">{{ "{:+.2f}%".format(acc.upnl_percent) }}</td>
+                        <td style="font-weight: 800; font-size: 1rem;">{{ "{:,.2f}".format(acc.balance) }} €</td>
+                        <td style="font-weight: 700; color: var(--accent);">{{ "{:.1f}".format(acc.weight_global or 0) }}%</td>
+                        <td class="{{ 'positive' if acc.upnl_percent >= 0 else 'negative' }}" style="font-weight: 800;">{{ "{:+.2f}%".format(acc.upnl_percent) }}</td>
                         <td><span class="tag-badge">{{ g_name[:-1] }}</span></td>
                     </tr>
                     
@@ -208,23 +240,23 @@ HTML_TEMPLATE = """
                             <table class="sub-table">
                                 {% for s in acc.subs %}
                                 <tr class="sub-row">
-                                    <td style="width: 35%; padding-left: 60px;">
-                                        <div style="display: flex; align-items: center; gap: 8px;">
+                                    <td style="width: 35%; padding-left: 65px;">
+                                        <div style="display: flex; align-items: center; gap: 10px;">
                                             <span class="tag-badge {{ 'tag-core' if s.strategic_tag == 'Core' else 'tag-spec' if s.strategic_tag == 'Spec' else '' }}">{{ s.strategic_tag }}</span>
                                             <div style="font-weight: 700;">{{ s.name }}</div>
                                         </div>
-                                        <div style="font-size: 0.65rem; color: #64748b; margin-top: 2px;">{{ s.detail or "" }} • {{ s.sector or "Diversifié" }}</div>
+                                        <div style="font-size: 0.65rem; color: #64748b; margin-top: 4px;">{{ s.detail or "" }} • {{ s.sector or "Diversifié" }}</div>
                                     </td>
                                     <td style="width: 15%;">
-                                        <div style="font-weight: 700;">{{ "{:,.2f}".format(s.value) }} €</div>
+                                        <div style="font-weight: 700; {{ 'color: var(--danger);' if s.value < 0 else '' }}">{{ "{:,.2f}".format(s.value) }} €</div>
                                         <div style="font-size: 0.65rem; color: var(--text-secondary);">{{ s.quantity or "" }} unités</div>
                                     </td>
                                     <td style="width: 50%;">
                                         <div class="metric-grid">
                                             <div class="metric-item"><span class="metric-label">1M / 3M</span><span class="{{ 'positive' if s.perf_1m and s.perf_1m > 0 else 'negative' }}">{{ "{:+.1f}%".format(s.perf_1m or 0) }}</span> / <span class="{{ 'positive' if s.perf_3m and s.perf_3m > 0 else 'negative' }}">{{ "{:+.1f}%".format(s.perf_3m or 0) }}</span></div>
                                             <div class="metric-item"><span class="metric-label">YTD / 1Y</span><span class="{{ 'positive' if s.perf_ytd and s.perf_ytd > 0 else 'negative' }}">{{ "{:+.1f}%".format(s.perf_ytd or 0) }}</span> / <span class="{{ 'positive' if s.perf_1y and s.perf_1y > 0 else 'negative' }}">{{ "{:+.1f}%".format(s.perf_1y or 0) }}</span></div>
-                                            <div class="metric-item"><span class="metric-label">Bêta / Vol</span><span>{{ "{:.2f}".format(s.beta or 1.0) }}</span> / <span>{{ "{:.1f}%".format(s.volatility or 0) }}</span></div>
-                                            <div class="metric-item"><span class="metric-label">Poids Env.</span><span style="color: var(--accent); font-weight: 700;">{{ "{:.1f}%".format(s.weight_envelope or 0) }}</span></div>
+                                            <div class="metric-item"><span class="metric-label">Bêta / Vol</span><span style="font-weight: 600;">{{ "{:.2f}".format(s.beta or 1.0) }}</span> / <span style="font-weight: 600;">{{ "{:.1f}%".format(s.volatility or 0) }}</span></div>
+                                            <div class="metric-item"><span class="metric-label">Poids Env.</span><span style="color: var(--accent); font-weight: 800;">{{ "{:.1f}%".format(s.weight_envelope or 0) }}</span></div>
                                         </div>
                                     </td>
                                 </tr>
@@ -278,6 +310,19 @@ def update():
         finally: is_updating = False
     threading.Thread(target=run).start()
     return jsonify({"status": "success"})
+
+@app.route("/download")
+def download():
+    files = [f for f in os.listdir(DATA_DIR) if f.endswith(".json")]
+    if not files: return "404", 404
+    latest = max(files, key=lambda x: os.path.getmtime(os.path.join(DATA_DIR, x)))
+    return send_file(os.path.join(DATA_DIR, latest), as_attachment=True)
+
+@app.route("/logs")
+def logs():
+    log_path = os.path.join(DATA_DIR, "app.log")
+    if not os.path.exists(log_path): return "Aucun log disponible", 404
+    return send_file(log_path, as_attachment=True)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
