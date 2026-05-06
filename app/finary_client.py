@@ -2,7 +2,10 @@ import os
 import json
 import logging
 import datetime
-from finary_uapi import auth, me, investments
+from finary_uapi.signin import signin
+from finary_uapi.auth import prepare_session
+from finary_uapi.user_me import get_user_me
+from finary_uapi.user_portfolio import get_portfolio_investments
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -10,36 +13,27 @@ class FinaryClient:
     def __init__(self, email, password):
         self.email = email
         self.password = password
-        self.credentials_path = "credentials.json"
+        self.session = None
         
-    def _prepare_credentials(self):
-        """Creates the credentials.json file required by finary_uapi."""
-        creds = {
-            "email": self.email,
-            "password": self.password
-        }
-        with open(self.credentials_path, "w") as f:
-            json.dump(creds, f)
-        logging.info("Credentials file prepared.")
-
     def login(self):
-        """Handles authentication."""
-        self._prepare_credentials()
+        """Handles authentication and session preparation."""
+        # finary_uapi reads FINARY_EMAIL and FINARY_PASSWORD from env
+        os.environ["FINARY_EMAIL"] = self.email
+        os.environ["FINARY_PASSWORD"] = self.password
         
-        # Check if already authenticated via session file
-        if not auth.is_authenticated():
-            logging.info("Not authenticated. Attempting signin...")
-            try:
-                # This function usually reads from credentials.json
-                auth.signin()
-                logging.info("Signin successful.")
-            except Exception as e:
-                logging.error(f"Authentication failed: {e}")
-                logging.error("If MFA is enabled, you might need to run 'python -m finary_uapi signin' manually once.")
-                return False
-        else:
-            logging.info("Already authenticated via existing session.")
-        return True
+        try:
+            logging.info("Attempting signin...")
+            # signin() handles credentials and creates necessary JWT/Cookie files
+            signin()
+            
+            logging.info("Preparing session...")
+            # prepare_session() loads the saved tokens and returns a session object
+            self.session = prepare_session()
+            logging.info("Session ready.")
+            return True
+        except Exception as e:
+            logging.error(f"Authentication failed: {e}")
+            return False
 
     def fetch_and_save(self, output_dir):
         """Fetches data and saves it to a JSON file."""
@@ -48,10 +42,15 @@ class FinaryClient:
 
         try:
             logging.info("Fetching data from Finary...")
+            
+            # Fetch data using the session
+            me_data = get_user_me(self.session)
+            portfolio_data = get_portfolio_investments(self.session)
+            
             data = {
                 "timestamp": datetime.datetime.now().isoformat(),
-                "me": me.get_me(),
-                "investments": investments.get_investments()
+                "me": me_data,
+                "portfolio": portfolio_data
             }
             
             # Ensure output directory exists
