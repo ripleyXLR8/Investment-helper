@@ -47,20 +47,25 @@ class FinancialEnricher:
     def enrich(self, data):
         logging.info("--- STARTING FINANCIAL ENRICHMENT ---")
         
+        categories = data.get("portfolio_summary", {}).get("categories", {})
+        
         # Collect all unique asset names first to batch them for LLM if needed
         all_assets = []
         for cat in ['investments', 'cryptos', 'real_estates']:
-            if cat in data:
-                for item in data[cat]:
-                    all_assets.append(self.get_ticker(item))
+            if cat in categories:
+                for item in categories[cat]:
+                    ticker = self.get_ticker(item)
+                    if ticker:
+                        all_assets.append(ticker)
         
         # Ask LLM to pre-resolve everything unknown
-        self.llm.resolve_tickers(list(set(all_assets)))
+        if all_assets:
+            self.llm.resolve_tickers(list(set(all_assets)))
 
         for cat in ['investments', 'cryptos', 'real_estates']:
-            if cat in data:
-                logging.info(f"   Enriching category: {cat} ({len(data[cat])} items)")
-                for item in data[cat]:
+            if cat in categories:
+                logging.info(f"   Enriching category: {cat} ({len(categories[cat])} items)")
+                for item in categories[cat]:
                     ticker = self.get_ticker(item)
                     metrics = self._fetch_metrics(ticker)
                     item.update(metrics)
