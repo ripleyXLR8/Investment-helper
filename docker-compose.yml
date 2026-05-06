@@ -1,0 +1,11 @@
+services:
+  finary-downloader:
+    build: .
+    container_name: finary-downloader
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    environment:
+      - DATA_DIR=/app/data

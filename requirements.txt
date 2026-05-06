@@ -1,0 +1,4 @@
+finary-uapi
+schedule
+python-dotenv
+requests
