@@ -41,7 +41,7 @@ HTML_TEMPLATE = """
         th { text-align: left; padding: 16px 24px; background: rgba(255,255,255,0.02); color: var(--text-secondary); font-size: 0.75rem; text-transform: uppercase; }
         td { padding: 16px 24px; border-top: 1px solid var(--card-border); font-size: 0.9rem; }
         .bank-logo { width: 28px; height: 28px; border-radius: 6px; background: #fff; padding: 2px; object-fit: contain; }
-        .badge { padding: 4px 8px; border-radius: 6px; font-size: 0.65rem; font-weight: 700; text-transform: uppercase; background: rgba(56,189,248,0.1); color: var(--accent); }
+        .badge { padding: 4px 8px; border-radius: 6px; font-size: 0.65rem; font-weight: 700; text-transform: uppercase; }
         .positive { color: var(--success); } .negative { color: var(--danger); }
         .spinner { width: 14px; height: 14px; border: 2px solid rgba(0,0,0,0.2); border-top: 2px solid #000; border-radius: 50%; animation: spin 1s linear infinite; display: none; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -62,25 +62,33 @@ HTML_TEMPLATE = """
         </header>
 
         <div class="summary-grid">
-            <div class="card"><span class="card-label">Patrimoine Famille & Entreprise</span><span class="card-value">{{ "{:,.2f}".format(total_wealth) }} €</span></div>
-            <div class="card"><span class="card-label">Nombre d'Actifs</span><span class="card-value">{{ accounts|length }}</span></div>
-            <div class="card"><span class="card-label">Dernière Mise à jour</span><span class="card-value" style="font-size: 1.2rem; margin-top: 10px;">{{ timestamp }}</span></div>
+            <div class="card"><span class="card-label">Patrimoine Brut</span><span class="card-value">{{ "{:,.2f}".format(total_wealth) }} €</span></div>
+            <div class="card"><span class="card-label">Actifs répertoriés</span><span class="card-value">{{ accounts|length }}</span></div>
+            <div class="card"><span class="card-label">Dernière Sync</span><span class="card-value" style="font-size: 1.2rem; margin-top: 10px;">{{ timestamp }}</span></div>
         </div>
 
         <table>
-            <thead><tr><th>Actif / Institution</th><th>Catégorie</th><th>Valeur</th><th>Plus-value</th></tr></thead>
+            <thead><tr><th>Actif / Institution</th><th>Catégorie</th><th>Valeur Actuelle</th><th>Performance</th></tr></thead>
             <tbody>
                 {% for acc in accounts %}
                 <tr>
                     <td>
                         <div style="display: flex; align-items: center; gap: 12px;">
-                            <img src="{{ acc.logo }}" class="bank-logo" onerror="this.src='https://finary.com/favicon.ico'">
+                            {% if acc.logo %}
+                            <img src="{{ acc.logo }}" class="bank-logo" onerror="this.style.display='none'">
+                            {% else %}
+                            <div class="bank-logo" style="background: var(--secondary); display: flex; align-items: center; justify-content: center; font-size: 0.8rem;">{{ acc.name[0] }}</div>
+                            {% endif %}
                             <div><div style="font-weight: 600;">{{ acc.name }}</div><div style="font-size: 0.75rem; color: var(--text-secondary);">{{ acc.institution }}</div></div>
                         </div>
                     </td>
-                    <td><span class="badge">{{ acc.type }}</span></td>
+                    <td><span class="badge" style="background: rgba(56,189,248,0.1); color: var(--accent);">{{ acc.type }}</span></td>
                     <td style="font-weight: 700;">{{ "{:,.2f}".format(acc.balance) }} €</td>
-                    <td class="{{ 'positive' if acc.upnl >= 0 else 'negative' }}">{{ "+" if acc.upnl >= 0 }}{{ "{:,.2f}".format(acc.upnl) }} € ({{ "{:.2f}".format(acc.upnl_percent) }}%)</td>
+                    <td class="{{ 'positive' if acc.upnl >= 0 else 'negative' }}">
+                        {% if acc.upnl != 0 %}
+                        {{ "+" if acc.upnl >= 0 }}{{ "{:,.2f}".format(acc.upnl) }} € ({{ "{:.2f}".format(acc.upnl_percent) }}%)
+                        {% else %}-{% endif %}
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -117,19 +125,34 @@ def get_financial_data():
         accounts = []
         seen_ids = set()
 
-        # Helper to avoid duplicates between Personal/Family views
         def add_acc(item, cat_name):
-            item_id = item.get("id") or f"{item.get('name')}_{item.get('balance')}"
+            if not isinstance(item, dict): return
+            
+            # Robust ID detection
+            item_id = str(item.get("id") or item.get("name") or "")
             if item_id in seen_ids: return
             seen_ids.add(item_id)
             
+            # Value extraction based on asset type
+            balance = item.get("balance") or item.get("current_price") or item.get("buying_price") or 0
+            # If it's a crypto, name might be quantity + symbol
+            name = item.get("display_name") or item.get("name") or "Inconnu"
+            if cat_name == "cryptos" and "quantity" in item:
+                name = f"{item.get('quantity')} {item.get('crypto', {}).get('symbol', '')}"
+
+            institution = item.get("bank", {}).get("name") or item.get("institution_name") or ""
+            if not institution:
+                if cat_name == "real_estates": institution = "Immobilier"
+                elif cat_name == "cryptos": institution = item.get("crypto", {}).get("name", "Portefeuille Crypto")
+                else: institution = "Autre"
+
             accounts.append({
-                "name": item.get("display_name") or item.get("name") or "Inconnu",
-                "institution": item.get("bank", {}).get("name") or item.get("institution_name") or "Autre",
-                "logo": item.get("logo_url") or "",
-                "balance": item.get("balance", 0),
-                "upnl": item.get("upnl", 0),
-                "upnl_percent": item.get("upnl_percent") or item.get("current_upnl_percent") or 0,
+                "name": name,
+                "institution": institution,
+                "logo": item.get("logo_url") or (item.get("crypto", {}).get("logo_url") if "crypto" in item else ""),
+                "balance": float(balance),
+                "upnl": float(item.get("upnl") or 0),
+                "upnl_percent": float(item.get("upnl_percent") or item.get("current_upnl_percent") or 0),
                 "type": cat_name.replace("_", " ").title()
             })
 
@@ -144,7 +167,7 @@ def get_financial_data():
             "accounts": sorted(accounts, key=lambda x: x['balance'], reverse=True)
         }
     except Exception as e:
-        logging.error(f"Error: {e}")
+        logging.error(f"Error parsing data: {e}")
         return None
 
 @app.route("/")
