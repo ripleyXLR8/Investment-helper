@@ -4,8 +4,10 @@ import schedule
 import logging
 import signal
 import sys
+import threading
 from dotenv import load_dotenv
 from finary_client import FinaryClient
+from server import app as flask_app
 
 # Load environment variables
 load_dotenv()
@@ -45,8 +47,17 @@ def job():
     client.fetch_and_save(DATA_DIR)
     update_heartbeat()
 
+def run_flask():
+    """Run the Flask server."""
+    logging.info("Starting Flask dashboard on port 5000...")
+    flask_app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
+
 def main():
     logging.info(f"Finary Downloader started. Job scheduled daily at {SCHEDULE_TIME}")
+    
+    # Start Flask server in a separate thread
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
     
     # Initial heartbeat
     update_heartbeat()
@@ -59,7 +70,7 @@ def main():
 
     while True:
         schedule.run_pending()
-        update_heartbeat()  # Keep heartbeat fresh
+        update_heartbeat()
         time.sleep(30)
 
 if __name__ == "__main__":
