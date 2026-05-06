@@ -25,34 +25,30 @@ class FinancialEnricher:
             json.dump(data, f, indent=4)
 
     def get_ticker(self, item):
-        # Handle different structures (direct crypto or security object)
-        sec = item.get("security", {}) if "security" in item else item
-        if not isinstance(sec, dict): return None
+        # Deep search for ISIN or Symbol
+        sec = item.get("security", {}) or {}
+        isin = item.get("isin") or sec.get("isin")
+        symbol = item.get("symbol") or sec.get("symbol")
         
-        isin = sec.get("isin")
-        symbol = sec.get("symbol")
-        name = sec.get("name", "")
-        
-        # Crypto handling
-        if "crypto" in item:
-            symbol = item.get("crypto", {}).get("symbol")
-            return f"{symbol}-USD" if symbol else None
+        # 1. Crypto handling
+        if "crypto" in item or item.get("asset_class") == "crypto":
+            sym = symbol or item.get("crypto", {}).get("symbol")
+            return f"{sym}-USD" if sym else None
 
-        # Prefer ISIN for precision
+        # 2. Priority to ISIN (extremely reliable for ETFs/Stocks)
         if isin and len(isin) == 12:
             return isin
         
-        # Fallback to symbol with exchange suffix
+        # 3. Handle specific suffixes based on exchange
         if symbol:
-            exchange = sec.get("exchange", {}).get("name", "").lower()
+            exchange = (sec.get("exchange") or {}).get("name", "").lower()
             if "paris" in exchange: return f"{symbol}.PA"
             if "amsterdam" in exchange: return f"{symbol}.AS"
             if "xetra" in exchange or "frankfurt" in exchange: return f"{symbol}.DE"
-            if "london" in exchange: return f"{symbol}.L"
             return symbol
             
-        # Last resort: use name for search in _fetch_metrics
-        return name if len(name) > 3 else None
+        # 4. Return name for Search fallback
+        return item.get("name") or sec.get("name")
 
     def enrich(self, data):
         logging.info("--- STARTING FINANCIAL ENRICHMENT ---")
