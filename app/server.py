@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import threading
+import pandas as pd
 from datetime import datetime, timezone
 from flask import Flask, render_template_string, jsonify, redirect, url_for, send_file, request
 from finary_client import FinaryClient
@@ -70,10 +71,10 @@ def get_financial_data():
                         "unit_price": sec_info.get("current_price"),
                         "value": s.get("current_value"),
                         "perf": s.get("current_upnl_percent"),
-                        "perf_1m": s.get("perf_1m") or sec_info.get("perf_1m"),
-                        "perf_3m": s.get("perf_3m") or sec_info.get("perf_3m"),
-                        "perf_1y": s.get("perf_1y") or sec_info.get("perf_1y"),
-                        "perf_ytd": s.get("perf_ytd") or sec_info.get("perf_ytd"),
+                        "perf_1m": s.get("perf_1m") if pd.notnull(s.get("perf_1m")) else sec_info.get("perf_1m", 0),
+                        "perf_3m": s.get("perf_3m") if pd.notnull(s.get("perf_3m")) else sec_info.get("perf_3m", 0),
+                        "perf_1y": s.get("perf_1y") if pd.notnull(s.get("perf_1y")) else sec_info.get("perf_1y", 0),
+                        "perf_ytd": s.get("perf_ytd") if pd.notnull(s.get("perf_ytd")) else sec_info.get("perf_ytd", 0),
                         "beta": s.get("beta"), "volatility": s.get("volatility"),
                         "sector": s.get("sector"), "geography": s.get("geography"),
                         "weight_global": s.get("weight_global"), "weight_envelope": s.get("weight_envelope"),
