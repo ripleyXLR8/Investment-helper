@@ -137,7 +137,7 @@ class FinaryClient:
             
             # Enrich with financial metrics (yfinance, weighting, etc.)
             try:
-                enricher = FinancialEnricher(output_dir)
+                enricher = FinancialEnricher()
                 data = enricher.enrich(data)
             except Exception as e:
                 logging.error(f"Financial enrichment failed: {e}")
