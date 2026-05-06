@@ -15,7 +15,7 @@ from finary_uapi.user_organizations import (
     get_organization_real_estates
 )
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# No basicConfig here, it's handled by main.py
 
 class FinaryClient:
     def __init__(self, email, password, otp_secret=None):
@@ -92,10 +92,8 @@ class FinaryClient:
                 for cat, func in org_funcs.items():
                     try:
                         res = func(self.session, org_id)
-                        # Handle both List (direct items) and Dict (wrapped result)
                         if isinstance(res, list):
                             items = res
-                            # Try to estimate wealth contribution if possible (simplification)
                             for item in items:
                                 total_wealth += item.get("balance", 0) if isinstance(item, dict) else 0
                         elif isinstance(res, dict):
