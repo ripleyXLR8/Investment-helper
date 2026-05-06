@@ -21,6 +21,7 @@ class FinancialEnricher:
             "Ledger BITCOIN": "BTC-USD",
             "Trade Republic": "XEON.DE",
             "AXA.PA": "CS.PA",
+            "FR0013412269": "UST.PA",
             "Amundi PEA US Tech ESG UCITS ETF Acc": "UST.PA",
             "Amundi PEA S&P 500 UCITS ETF Acc": "500.PA",
             "Amundi Euro Stoxx 50 UCITS ETF DR - EUR (D)": "MSE.PA",

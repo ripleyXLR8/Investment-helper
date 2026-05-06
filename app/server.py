@@ -79,6 +79,7 @@ def get_financial_data():
                         "sector": s.get("sector"), "geography": s.get("geography"),
                         "weight_global": s.get("weight_global"), "weight_envelope": s.get("weight_envelope"),
                         "strategic_tag": s.get("strategic_tag", "Core"),
+                        "ticker": s.get("ticker"),
                         "id": str(s.get("id", sec_info.get("name")))
                     })
             elif cat_name == "real_estates":
@@ -253,7 +254,12 @@ HTML_TEMPLATE = """
                                     </td>
                                     <td style="width: 15%;">
                                         <div style="font-weight: 700; {{ 'color: var(--danger);' if s.value < 0 else '' }}">{{ "{:,.2f}".format(s.value) }} €</div>
-                                        <div style="font-size: 0.65rem; color: var(--text-secondary);">{{ s.quantity or "" }} unités</div>
+                                        {% if s.ticker %}
+                                        <a href="https://finance.yahoo.com/quote/{{ s.ticker }}" target="_blank" style="font-size: 0.65rem; color: var(--accent); text-decoration: none; font-weight: 600; border: 1px solid rgba(56, 189, 248, 0.2); padding: 1px 4px; border-radius: 4px;">
+                                            🔍 {{ s.ticker }}
+                                        </a>
+                                        {% endif %}
+                                        <div style="font-size: 0.65rem; color: var(--text-secondary); margin-top: 2px;">{{ s.quantity or "" }} unités</div>
                                     </td>
                                     <td style="width: 50%;">
                                         <div class="metric-grid">
