@@ -1,12 +1,20 @@
 import os
 import json
 import logging
-from flask import Flask, render_template_string, jsonify
+import threading
+from flask import Flask, render_template_string, jsonify, redirect, url_for
+from finary_client import FinaryClient
 
 app = Flask(__name__)
 DATA_DIR = os.getenv("DATA_DIR", "/app/data")
+FINARY_EMAIL = os.getenv("FINARY_EMAIL")
+FINARY_PASSWORD = os.getenv("FINARY_PASSWORD")
+FINARY_OTP_SECRET = os.getenv("FINARY_OTP_SECRET")
 
-# Premium Financial Dashboard Template
+# Flag to prevent multiple simultaneous updates
+is_updating = False
+
+# Premium Financial Dashboard Template with Update Button
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="fr">
@@ -21,7 +29,7 @@ HTML_TEMPLATE = """
             --card-bg: #111827;
             --card-border: #1f2937;
             --accent: #38bdf8;
-            --accent-glow: rgba(56, 189, 248, 0.2);
+            --accent-hover: #0ea5e9;
             --success: #10b981;
             --danger: #ef4444;
             --text-primary: #f9fafb;
@@ -73,10 +81,7 @@ HTML_TEMPLATE = """
             border: 1px solid var(--card-border);
             border-radius: 20px;
             padding: 24px;
-            transition: transform 0.2s, border-color 0.2s;
-        }
-        .card:hover {
-            border-color: var(--accent);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
         }
         .card-label {
             color: var(--text-secondary);
@@ -100,6 +105,34 @@ HTML_TEMPLATE = """
         }
         .positive { color: var(--success); }
         .negative { color: var(--danger); }
+
+        .btn-update {
+            background: var(--accent);
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 10px;
+            font-weight: 700;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            text-decoration: none;
+        }
+        .btn-update:hover {
+            background: var(--accent-hover);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(56, 189, 248, 0.3);
+        }
+        .btn-update:disabled {
+            background: var(--card-border);
+            color: var(--text-secondary);
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
 
         .section-title {
             font-size: 1.25rem;
@@ -133,15 +166,11 @@ HTML_TEMPLATE = """
             font-weight: 600;
             font-size: 0.75rem;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
         }
         td {
             padding: 16px 24px;
             border-top: 1px solid var(--card-border);
             font-size: 0.9rem;
-        }
-        tr:hover td {
-            background: rgba(255,255,255,0.01);
         }
         .bank-info {
             display: flex;
@@ -156,12 +185,6 @@ HTML_TEMPLATE = """
             padding: 2px;
             object-fit: contain;
         }
-        .footer {
-            margin-top: 60px;
-            text-align: center;
-            color: var(--text-secondary);
-            font-size: 0.8rem;
-        }
         .badge {
             padding: 4px 8px;
             border-radius: 6px;
@@ -170,7 +193,21 @@ HTML_TEMPLATE = """
             text-transform: uppercase;
             background: var(--card-border);
         }
-        .badge-plus { background: #f59e0b; color: #000; }
+        
+        /* Spinner */
+        .spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(0,0,0,0.3);
+            border-top: 2px solid #000;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            display: none;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        .updating .spinner { display: block; }
+        .updating .icon { display: none; }
     </style>
 </head>
 <body>
@@ -180,12 +217,19 @@ HTML_TEMPLATE = """
                 <div class="avatar">{{ me.firstname[0] }}{{ me.lastname[0] }}</div>
                 <div>
                     <div style="font-weight: 700; font-size: 1.1rem;">{{ me.fullname }}</div>
-                    <div style="color: var(--text-secondary); font-size: 0.85rem;">{{ me.email }} <span class="badge badge-plus">{{ me.subscription }}</span></div>
+                    <div style="color: var(--text-secondary); font-size: 0.85rem;">{{ me.email }}</div>
                 </div>
             </div>
-            <div style="text-align: right;">
-                <div style="color: var(--text-secondary); font-size: 0.75rem;">Dernière mise à jour</div>
-                <div style="font-weight: 600;">{{ timestamp }}</div>
+            <div style="display: flex; align-items: center; gap: 20px;">
+                <button id="updateBtn" class="btn-update" onclick="triggerUpdate()">
+                    <span class="spinner"></span>
+                    <span class="icon">🔄</span>
+                    <span id="btnText">Mettre à jour</span>
+                </button>
+                <div style="text-align: right;">
+                    <div style="color: var(--text-secondary); font-size: 0.75rem;">Dernière snapshot</div>
+                    <div style="font-weight: 600;">{{ timestamp }}</div>
+                </div>
             </div>
         </header>
 
@@ -244,11 +288,43 @@ HTML_TEMPLATE = """
                 {% endfor %}
             </tbody>
         </table>
-
-        <div class="footer">
-            Généré avec ❤️ par Finary Downloader • Données sécurisées
-        </div>
     </div>
+
+    <script>
+        function triggerUpdate() {
+            const btn = document.getElementById('updateBtn');
+            const btnText = document.getElementById('btnText');
+            
+            btn.disabled = true;
+            btn.classList.add('updating');
+            btnText.innerText = 'Mise à jour...';
+            
+            fetch('/update', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        setTimeout(() => {
+                            window.location.reload();
+                        }, 2000);
+                    } else {
+                        alert('Erreur : ' + data.message);
+                        resetBtn();
+                    }
+                })
+                .catch(err => {
+                    alert('Erreur de connexion');
+                    resetBtn();
+                });
+        }
+        
+        function resetBtn() {
+            const btn = document.getElementById('updateBtn');
+            const btnText = document.getElementById('btnText');
+            btn.disabled = false;
+            btn.classList.remove('updating');
+            btnText.innerText = 'Mettre à jour';
+        }
+    </script>
 </body>
 </html>
 """
@@ -271,7 +347,6 @@ def get_financial_data():
         with open(os.path.join(DATA_DIR, latest_file), "r", encoding="utf-8") as f:
             raw = json.load(f)
         
-        # Extraction sélective des données financières
         me_raw = raw.get("me", {}).get("result", {})
         portfolio_raw = raw.get("portfolio", {}).get("result", {})
         
@@ -283,7 +358,6 @@ def get_financial_data():
                 "fullname": me_raw.get("fullname", "Utilisateur Finary"),
                 "email": me_raw.get("email", ""),
                 "age": me_raw.get("age", ""),
-                "subscription": me_raw.get("subscription_status", "free"),
                 "income": {
                     "salary": me_raw.get("investor_profile", {}).get("monthly_salary", 0),
                     "expenses": me_raw.get("investor_profile", {}).get("monthly_expenses", 0),
@@ -314,15 +388,33 @@ def get_financial_data():
             
         return data
     except Exception as e:
-        logging.error(f"Error parsing financial data: {e}")
         return None
 
 @app.route("/")
 def index():
     data = get_financial_data()
     if not data:
-        return "<h1>En attente de données...</h1><p>Le premier téléchargement est en cours ou a échoué.</p>"
+        return "<h1>En attente de données...</h1><p>Cliquez sur Mettre à jour pour lancer le premier snapshot.</p><form action='/update' method='POST'><button type='submit'>Lancer la première synchro</button></form>"
     return render_template_string(HTML_TEMPLATE, **data)
+
+@app.route("/update", methods=["POST"])
+def update():
+    global is_updating
+    if is_updating:
+        return jsonify({"status": "error", "message": "Mise à jour déjà en cours"}), 400
+    
+    def run_update():
+        global is_updating
+        is_updating = True
+        try:
+            client = FinaryClient(FINARY_EMAIL, FINARY_PASSWORD, FINARY_OTP_SECRET)
+            client.fetch_and_save(DATA_DIR)
+        finally:
+            is_updating = False
+
+    thread = threading.Thread(target=run_update)
+    thread.start()
+    return jsonify({"status": "success", "message": "Mise à jour lancée"})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
