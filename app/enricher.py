@@ -19,7 +19,11 @@ class FinancialEnricher:
             "PEA - Bourse Direct": "CW8.PA",
             "Ledger ETHER": "ETH-USD",
             "Ledger BITCOIN": "BTC-USD",
-            "Trade Republic": "DBX0AN.DE"
+            "Trade Republic": "DBX0AN.DE",
+            "Amundi PEA US Tech ESG UCITS ETF Acc": "UST.PA",
+            "Amundi PEA S&P 500 UCITS ETF Acc": "500.PA",
+            "Amundi Euro Stoxx 50 UCITS ETF DR - EUR (D)": "MSE.PA",
+            "BNP Paribas Easy Stoxx Europe 600 UCITS ETF": "ETZ.PA"
         }
 
     def _load_cache(self):

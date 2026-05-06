@@ -60,6 +60,8 @@ class LLMMapper:
         try:
             response = self.model.generate_content(prompt)
             text = response.text.strip()
+            logging.info(f"Gemini Raw Response: {text}")
+            
             # Handle potential markdown formatting in response
             if "```json" in text:
                 text = text.split("```json")[1].split("```")[0].strip()
