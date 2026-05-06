@@ -60,34 +60,33 @@ class FinancialEnricher:
         categories = summary.get("categories", {})
         total_wealth = float(summary.get("total_amount", 0)) or 1
         
-        for cat_name, accounts in categories.items():
-            for acc in accounts:
-                if not isinstance(acc, dict): continue
+        for cat_name, items in categories.items():
+            if not items: continue
+            logging.info(f"  Enriching category: {cat_name} ({len(items)} items)")
+            
+            for item in items:
+                if not isinstance(item, dict): continue
                 
-                # Weight of account in global portfolio
-                acc_balance = float(acc.get("balance") or acc.get("current_value") or 0)
-                acc["weight_global"] = (acc_balance / total_wealth) * 100
+                # Get name for logging
+                name = item.get("name") or (item.get("security") or {}).get("name") or "Unknown"
                 
-                # Enrich sub-items (Securities in Investments, or Cryptos)
-                sub_items = acc.get("securities", []) or acc.get("cryptos", [])
-                if not sub_items and cat_name == "cryptos": sub_items = [acc] # Single crypto line
+                # Weight calculations
+                val = float(item.get("current_value") or item.get("balance") or 0)
+                item["weight_global"] = (val / total_wealth) * 100
                 
-                for sub in sub_items:
-                    if not isinstance(sub, dict): continue
-                    
-                    sub_val = float(sub.get("current_value") or sub.get("balance") or 0)
-                    sub["weight_global"] = (sub_val / total_wealth) * 100
-                    sub["weight_envelope"] = (sub_val / acc_balance * 100) if acc_balance > 0 else 0
-                    
-                    # Strategic Tag
-                    asset_id = str(sub.get("id") or sub.get("name"))
-                    sub["strategic_tag"] = self.tags.get(asset_id, "Core")
-                    
-                    # Yahoo Finance Metrics
-                    ticker_query = self.get_ticker(sub)
-                    if ticker_query:
-                        metrics = self._fetch_metrics(ticker_query)
-                        sub.update(metrics)
+                # Strategic Tag
+                asset_id = str(item.get("id") or name)
+                item["strategic_tag"] = self.tags.get(asset_id, "Core")
+                
+                # Yahoo Finance Metrics
+                ticker_query = self.get_ticker(item)
+                if ticker_query:
+                    logging.info(f"    -> {name[:30]:<30} | Ticker: {ticker_query}")
+                    metrics = self._fetch_metrics(ticker_query)
+                    item.update(metrics)
+                else:
+                    logging.debug(f"    -> {name[:30]:<30} | No ticker found")
+                    item.update(self._get_default_metrics())
         
         logging.info("--- ENRICHMENT COMPLETED ---")
         self._save_json(self.cache_path, self.cache)
@@ -103,35 +102,34 @@ class FinancialEnricher:
             "FR0000053951": "AI.PA",      # Air Liquide (Prime fidélité)
         }
         if query in mapping:
-            logging.debug(f"Mapping ISIN {query} to ticker {mapping[query]}")
             query = mapping[query]
 
         now = datetime.now()
         if query in self.cache:
             cached = self.cache[query]
-            cached_time = datetime.fromisoformat(cached["timestamp"])
-            if (now - cached_time).total_seconds() < 86400: # 24h cache
-                return cached["data"]
-
-        logging.debug(f"Fetching yfinance data for {query}")
-        try:
-            # 1. Try direct ticker/ISIN
-            t = yf.Ticker(query)
-            hist = t.history(period="1y")
+            # Force refresh if cache data is mostly zeros (failed previously)
+            metrics = cached.get("data", {})
+            has_valid_perf = any(metrics.get(k, 0) != 0 for k in ["perf_1m", "perf_3m", "perf_1y", "perf_ytd"])
             
-            # 2. Fallback search if empty (common for European ISINs or names)
-            if hist.empty:
-                search = yf.Search(query, max_results=1).news # Search returns a News object but Search.results is what we want
-                # Actually yf.Search(query).results is the correct way in recent versions
-                results = yf.Search(query, max_results=3).results
-                if results:
-                    best_ticker = results[0]['symbol']
-                    logging.info(f"Found ticker {best_ticker} for {query}")
-                    t = yf.Ticker(best_ticker)
-                    hist = t.history(period="1y")
+            cached_time = datetime.fromisoformat(cached["timestamp"])
+            if (now - cached_time).total_seconds() < 86400 and has_valid_perf:
+                return metrics
+
+        logging.debug(f"      Requesting yfinance for {query}...")
+        try:
+            ticker = yf.Ticker(query)
+            hist = ticker.history(period="1y")
+            
+            # Fallback search if direct ticker/ISIN fails
+            if hist.empty and len(query) > 5:
+                search = yf.Search(query, max_results=1).results
+                if search:
+                    best_ticker = search[0]['symbol']
+                    logging.info(f"      Found fallback ticker {best_ticker} for {query}")
+                    ticker = yf.Ticker(best_ticker)
+                    hist = ticker.history(period="1y")
 
             if hist.empty:
-                # Fill with defaults to avoid NaN in UI
                 return self._get_default_metrics()
 
             current_price = hist['Close'].iloc[-1]
@@ -156,7 +154,7 @@ class FinancialEnricher:
                     perf_ytd = ((current_price / ytd_price) - 1) * 100
             except: pass
 
-            info = t.info or {}
+            info = ticker.info or {}
             metrics = {
                 "perf_1m": round(get_perf(30), 2),
                 "perf_3m": round(get_perf(90), 2),

@@ -82,21 +82,21 @@ class FinaryClient:
                     all_assets[cat].extend(items)
                     
                     # Calculate total from items if summary is missing
-                    cat_total = data.get("total", {}).get("amount") if isinstance(data, dict) else None
-                    if cat_total is None:
+                    cat_total = data.get("total", {}).get("amount") if isinstance(data, dict) else 0
+                    if not cat_total:
                         cat_total = sum(self._get_item_value(i) for i in items)
                     
                     total_wealth += cat_total
-                    logging.debug(f"  - Personal {cat}: {len(items)} items found (Total: {cat_total}€)")
+                    logging.info(f"  -> Personal {cat}: {len(items)} items")
                 except Exception as e:
-                    logging.debug(f"Skipping personal {cat}: {e}")
+                    logging.warning(f"Skipping personal {cat}: {e}")
 
             # 2. Fetch Assets for each Organization
             for org in organizations:
                 if not isinstance(org, dict): continue
                 org_id = org.get("id")
                 org_name = org.get("name") or "Sans nom"
-                logging.info(f"Fetching assets for organization: {org_name} ({org_id})...")
+                logging.info(f"Fetching assets for organization: {org_name}...")
                 
                 org_funcs = {
                     "investments": get_organization_investments,
@@ -120,19 +120,15 @@ class FinaryClient:
                             all_assets[cat].extend(items)
                             org_cat_total = sum(self._get_item_value(i) for i in items)
                             total_wealth += org_cat_total
-                            logging.info(f"  - Org {org_name} | {cat}: {len(items)} items found (Total: {org_cat_total}€)")
-                        else:
-                            logging.debug(f"  - Org {org_name} | {cat}: No items found")
+                            logging.info(f"  -> Org {org_name} | {cat}: {len(items)} items")
                             
                     except Exception as e:
                         logging.warning(f"Error fetching {cat} for org {org_name}: {e}")
 
-            logging.info(f"Final Aggregated Wealth: {total_wealth}€")
+            logging.info(f"Total Aggregated Wealth: {total_wealth:,.2f}€")
 
             data = {
                 "timestamp": datetime.datetime.now().isoformat(),
-                "me": me_data,
-                "organizations": organizations,
                 "portfolio_summary": {
                     "total_amount": total_wealth,
                     "categories": all_assets
@@ -152,7 +148,7 @@ class FinaryClient:
             with open(filepath, "w", encoding='utf-8') as f:
                 json.dump(data, f, indent=4, ensure_ascii=False)
             
-            logging.info(f"Consolidated data saved to {filepath}")
+            logging.info(f"SUCCESS: Data saved to {filename}")
             return True
         except Exception as e:
             logging.error(f"Global Error during fetch: {e}")
