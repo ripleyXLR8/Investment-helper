@@ -55,7 +55,7 @@ class FinancialEnricher:
         return name if len(name) > 3 else None
 
     def enrich(self, data):
-        logging.info("Enriching nested data with financial metrics...")
+        logging.info("--- STARTING FINANCIAL ENRICHMENT ---")
         summary = data.get("portfolio_summary", {})
         categories = summary.get("categories", {})
         total_wealth = float(summary.get("total_amount", 0)) or 1
@@ -89,10 +89,23 @@ class FinancialEnricher:
                         metrics = self._fetch_metrics(ticker_query)
                         sub.update(metrics)
         
+        logging.info("--- ENRICHMENT COMPLETED ---")
         self._save_json(self.cache_path, self.cache)
         return data
 
     def _fetch_metrics(self, query):
+        # Manual Mapping for French ETFs/Stocks
+        mapping = {
+            "FR0013412269": "PANX.PA",   # Amundi PEA US Tech
+            "FR0011871128": "ESE.PA",     # Amundi PEA S&P 500
+            "LU1681047319": "MSE.PA",     # Amundi Euro Stoxx 50
+            "FR0011550193": "E600.PA",    # BNP Easy Stoxx Europe 600
+            "FR0000053951": "AI.PA",      # Air Liquide (Prime fidélité)
+        }
+        if query in mapping:
+            logging.debug(f"Mapping ISIN {query} to ticker {mapping[query]}")
+            query = mapping[query]
+
         now = datetime.now()
         if query in self.cache:
             cached = self.cache[query]
