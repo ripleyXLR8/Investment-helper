@@ -2,7 +2,7 @@ import os
 import json
 import logging
 import threading
-from flask import Flask, render_template_string, jsonify, redirect, url_for
+from flask import Flask, render_template_string, jsonify, redirect, url_for, send_file
 from finary_client import FinaryClient
 
 app = Flask(__name__)
@@ -14,7 +14,7 @@ FINARY_OTP_SECRET = os.getenv("FINARY_OTP_SECRET")
 # Flag to prevent multiple simultaneous updates
 is_updating = False
 
-# Premium Financial Dashboard Template with Update Button
+# Premium Financial Dashboard Template with Download Button
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="fr">
@@ -30,6 +30,8 @@ HTML_TEMPLATE = """
             --card-border: #1f2937;
             --accent: #38bdf8;
             --accent-hover: #0ea5e9;
+            --secondary: #334155;
+            --secondary-hover: #475569;
             --success: #10b981;
             --danger: #ef4444;
             --text-primary: #f9fafb;
@@ -106,14 +108,17 @@ HTML_TEMPLATE = """
         .positive { color: var(--success); }
         .negative { color: var(--danger); }
 
-        .btn-update {
-            background: var(--accent);
-            color: #000;
+        .btn-group {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+        .btn {
             border: none;
-            padding: 10px 20px;
+            padding: 10px 18px;
             border-radius: 10px;
             font-weight: 700;
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             cursor: pointer;
             transition: all 0.2s;
             display: flex;
@@ -121,18 +126,13 @@ HTML_TEMPLATE = """
             gap: 8px;
             text-decoration: none;
         }
-        .btn-update:hover {
-            background: var(--accent-hover);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(56, 189, 248, 0.3);
-        }
-        .btn-update:disabled {
-            background: var(--card-border);
-            color: var(--text-secondary);
-            cursor: not-allowed;
-            transform: none;
-            box-shadow: none;
-        }
+        .btn-primary { background: var(--accent); color: #000; }
+        .btn-primary:hover { background: var(--accent-hover); transform: translateY(-2px); }
+        
+        .btn-secondary { background: var(--secondary); color: var(--text-primary); }
+        .btn-secondary:hover { background: var(--secondary-hover); transform: translateY(-2px); }
+
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
         .section-title {
             font-size: 1.25rem;
@@ -185,27 +185,18 @@ HTML_TEMPLATE = """
             padding: 2px;
             object-fit: contain;
         }
-        .badge {
-            padding: 4px 8px;
-            border-radius: 6px;
-            font-size: 0.7rem;
-            font-weight: 700;
-            text-transform: uppercase;
-            background: var(--card-border);
-        }
         
         /* Spinner */
         .spinner {
-            width: 16px;
-            height: 16px;
-            border: 2px solid rgba(0,0,0,0.3);
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(0,0,0,0.2);
             border-top: 2px solid #000;
             border-radius: 50%;
             animation: spin 1s linear infinite;
             display: none;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        
         .updating .spinner { display: block; }
         .updating .icon { display: none; }
     </style>
@@ -220,13 +211,16 @@ HTML_TEMPLATE = """
                     <div style="color: var(--text-secondary); font-size: 0.85rem;">{{ me.email }}</div>
                 </div>
             </div>
-            <div style="display: flex; align-items: center; gap: 20px;">
-                <button id="updateBtn" class="btn-update" onclick="triggerUpdate()">
+            <div class="btn-group">
+                <a href="/download" class="btn btn-secondary">
+                    <span>💾</span> JSON Brut
+                </a>
+                <button id="updateBtn" class="btn btn-primary" onclick="triggerUpdate()">
                     <span class="spinner"></span>
                     <span class="icon">🔄</span>
                     <span id="btnText">Mettre à jour</span>
                 </button>
-                <div style="text-align: right;">
+                <div style="text-align: right; margin-left: 10px;">
                     <div style="color: var(--text-secondary); font-size: 0.75rem;">Dernière snapshot</div>
                     <div style="font-weight: 600;">{{ timestamp }}</div>
                 </div>
@@ -277,7 +271,7 @@ HTML_TEMPLATE = """
                             </div>
                         </div>
                     </td>
-                    <td><span class="badge">{{ acc.type }}</span></td>
+                    <td><span style="padding: 4px 8px; border-radius: 6px; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; background: var(--card-border);">{{ acc.type }}</span></td>
                     <td style="font-weight: 700;">{{ "{:,.2f}".format(acc.balance) }} €</td>
                     <td class="{{ 'positive' if acc.upnl >= 0 else 'negative' }}">
                         {{ "+" if acc.upnl >= 0 }}{{ "{:,.2f}".format(acc.upnl) }} €
@@ -294,7 +288,6 @@ HTML_TEMPLATE = """
         function triggerUpdate() {
             const btn = document.getElementById('updateBtn');
             const btnText = document.getElementById('btnText');
-            
             btn.disabled = true;
             btn.classList.add('updating');
             btnText.innerText = 'Mise à jour...';
@@ -303,9 +296,7 @@ HTML_TEMPLATE = """
                 .then(response => response.json())
                 .then(data => {
                     if (data.status === 'success') {
-                        setTimeout(() => {
-                            window.location.reload();
-                        }, 2000);
+                        setTimeout(() => { window.location.reload(); }, 2000);
                     } else {
                         alert('Erreur : ' + data.message);
                         resetBtn();
@@ -316,7 +307,6 @@ HTML_TEMPLATE = """
                     resetBtn();
                 });
         }
-        
         function resetBtn() {
             const btn = document.getElementById('updateBtn');
             const btnText = document.getElementById('btnText');
@@ -338,12 +328,19 @@ def format_date(date_str):
     except:
         return date_str
 
-def get_financial_data():
+def get_latest_file():
     try:
         files = [f for f in os.listdir(DATA_DIR) if f.endswith(".json")]
         if not files: return None
+        return max(files, key=lambda x: os.path.getmtime(os.path.join(DATA_DIR, x)))
+    except:
+        return None
+
+def get_financial_data():
+    try:
+        latest_file = get_latest_file()
+        if not latest_file: return None
         
-        latest_file = max(files, key=lambda x: os.path.getmtime(os.path.join(DATA_DIR, x)))
         with open(os.path.join(DATA_DIR, latest_file), "r", encoding="utf-8") as f:
             raw = json.load(f)
         
@@ -394,14 +391,13 @@ def get_financial_data():
 def index():
     data = get_financial_data()
     if not data:
-        return "<h1>En attente de données...</h1><p>Cliquez sur Mettre à jour pour lancer le premier snapshot.</p><form action='/update' method='POST'><button type='submit'>Lancer la première synchro</button></form>"
+        return "<h1>En attente de données...</h1><form action='/update' method='POST'><button type='submit'>Lancer la synchro</button></form>"
     return render_template_string(HTML_TEMPLATE, **data)
 
 @app.route("/update", methods=["POST"])
 def update():
     global is_updating
-    if is_updating:
-        return jsonify({"status": "error", "message": "Mise à jour déjà en cours"}), 400
+    if is_updating: return jsonify({"status": "error", "message": "Déjà en cours"}), 400
     
     def run_update():
         global is_updating
@@ -409,12 +405,16 @@ def update():
         try:
             client = FinaryClient(FINARY_EMAIL, FINARY_PASSWORD, FINARY_OTP_SECRET)
             client.fetch_and_save(DATA_DIR)
-        finally:
-            is_updating = False
+        finally: is_updating = False
 
-    thread = threading.Thread(target=run_update)
-    thread.start()
-    return jsonify({"status": "success", "message": "Mise à jour lancée"})
+    threading.Thread(target=run_update).start()
+    return jsonify({"status": "success"})
+
+@app.route("/download")
+def download():
+    latest = get_latest_file()
+    if not latest: return "Aucun fichier à télécharger", 404
+    return send_file(os.path.join(DATA_DIR, latest), as_attachment=True)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
