@@ -14,6 +14,7 @@ from finary_uapi.user_organizations import (
     get_organization_scpis,
     get_organization_real_estates
 )
+from enricher import FinancialEnricher
 
 class FinaryClient:
     def __init__(self, email, password, otp_secret=None):
@@ -138,6 +139,13 @@ class FinaryClient:
                 }
             }
             
+            # Enrich with financial metrics (yfinance, weighting, etc.)
+            try:
+                enricher = FinancialEnricher(output_dir)
+                data = enricher.enrich(data)
+            except Exception as e:
+                logging.error(f"Financial enrichment failed: {e}")
+
             os.makedirs(output_dir, exist_ok=True)
             filename = f"finary_data_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
             filepath = os.path.join(output_dir, filename)

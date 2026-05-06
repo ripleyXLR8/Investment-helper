@@ -3,7 +3,7 @@ import json
 import logging
 import threading
 from datetime import datetime, timezone
-from flask import Flask, render_template_string, jsonify, redirect, url_for, send_file
+from flask import Flask, render_template_string, jsonify, redirect, url_for, send_file, request
 from finary_client import FinaryClient
 
 app = Flask(__name__)
@@ -14,32 +14,9 @@ FINARY_OTP_SECRET = os.getenv("FINARY_OTP_SECRET")
 
 is_updating = False
 
-def get_item_value(item):
-    if not isinstance(item, dict): return 0
-    return (
-        item.get("balance") or 
-        item.get("current_value") or 
-        item.get("current_price") or 
-        item.get("buying_price") or 0
-    )
-
-def calculate_annualized_perf(total_perf_percent, created_at_str):
-    if not created_at_str or total_perf_percent is None:
-        return None
-    try:
-        dt_str = created_at_str.replace("Z", "+00:00")
-        created_at = datetime.fromisoformat(dt_str)
-        now = datetime.now(timezone.utc)
-        diff = now - created_at
-        years = diff.days / 365.25
-        if years <= 0.01: return None
-        return ((1 + (total_perf_percent / 100)) ** (1 / years) - 1) * 100
-    except:
-        return None
-
 def get_financial_data():
     try:
-        files = [f for f in os.listdir(DATA_DIR) if f.endswith(".json")]
+        files = [f for f in os.listdir(DATA_DIR) if f.endswith(".json") and "finary_data" in f]
         if not files: return None
         latest_file = max(files, key=lambda x: os.path.getmtime(os.path.join(DATA_DIR, x)))
         with open(os.path.join(DATA_DIR, latest_file), "r", encoding="utf-8") as f:
@@ -75,16 +52,10 @@ def get_financial_data():
                     if member.get("slug") == me_slug:
                         user_share = share
 
-            partial_balance = get_item_value(item)
+            partial_balance = float(item.get("balance") or item.get("current_value") or 0)
             full_balance = partial_balance / user_share if 0 < user_share < 1.0 else partial_balance
             
-            upnl = float(item.get("upnl") or item.get("current_upnl") or 0)
             upnl_pct = float(item.get("upnl_percent") or item.get("current_upnl_percent") or 0)
-            created_at = item.get("created_at") or item.get("opened_at")
-            annualized = calculate_annualized_perf(upnl_pct, created_at)
-
-            name = item.get("display_name") or item.get("name") or "Inconnu"
-            institution = item.get("bank", {}).get("name") or item.get("institution_name") or ""
             
             subs = []
             if cat_name == "investments":
@@ -97,25 +68,32 @@ def get_financial_data():
                         "pru": s.get("buying_price"),
                         "unit_price": sec_info.get("current_price"),
                         "value": s.get("current_value"),
-                        "perf": s.get("current_upnl_percent")
+                        "perf": s.get("current_upnl_percent"),
+                        # Enriched fields
+                        "perf_1m": s.get("perf_1m"), "perf_3m": s.get("perf_3m"), "perf_1y": s.get("perf_1y"), "perf_ytd": s.get("perf_ytd"),
+                        "beta": s.get("beta"), "volatility": s.get("volatility"),
+                        "sector": s.get("sector"), "geography": s.get("geography"),
+                        "weight_global": s.get("weight_global"), "weight_envelope": s.get("weight_envelope"),
+                        "strategic_tag": s.get("strategic_tag", "Core"),
+                        "id": str(s.get("id", sec_info.get("name")))
                     })
             elif cat_name == "real_estates":
                 for l in item.get("loans", []):
                     subs.append({
                         "name": f"Emprunt: {l.get('name')}",
-                        "detail": "Passif",
-                        "quantity": None,
-                        "pru": None,
-                        "unit_price": None,
                         "value": -float(l.get("balance", 0)),
-                        "perf": None
+                        "detail": "Passif"
                     })
 
             return {
-                "name": name, "institution": institution, "owners": owners,
+                "name": item.get("display_name") or item.get("name") or "Inconnu",
+                "institution": item.get("bank", {}).get("name") or item.get("institution_name") or "",
+                "owners": owners,
                 "logo": item.get("logo_url") or (item.get("crypto", {}).get("logo_url") if "crypto" in item else ""),
-                "balance": float(full_balance), "upnl": upnl, "upnl_percent": upnl_pct,
-                "annualized_perf": annualized, "subs": subs
+                "balance": float(full_balance),
+                "upnl_percent": upnl_pct,
+                "subs": subs,
+                "weight_global": item.get("weight_global")
             }
 
         for cat, items in categories.items():
@@ -130,11 +108,9 @@ def get_financial_data():
         for g in groups.values():
             g["assets"].sort(key=lambda x: x["balance"], reverse=True)
 
-        total_wealth = sum(g["total"] for g in groups.values())
-
         return {
             "timestamp": raw.get("timestamp"),
-            "total_wealth": total_wealth,
+            "total_wealth": summary.get("total_amount", 0),
             "groups": groups
         }
     except Exception as e:
@@ -147,7 +123,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Finary Family Dashboard</title>
+    <title>Finary Advanced Analytics</title>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
@@ -155,68 +131,57 @@ HTML_TEMPLATE = """
             --accent: #38bdf8; --success: #10b981; --danger: #ef4444; --text-primary: #f9fafb; --text-secondary: #9ca3af;
         }
         body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: var(--bg); color: var(--text-primary); margin: 0; padding: 0; }
-        .container { max-width: 1200px; margin: 0 auto; padding: 40px 20px; }
-        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 40px; }
-        .btn { border: none; padding: 10px 18px; border-radius: 10px; font-weight: 700; font-size: 0.85rem; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 8px; text-decoration: none; }
-        .btn-primary { background: var(--accent); color: #000; }
-        .btn-secondary { background: #1f2937; color: var(--text-primary); }
+        .container { max-width: 1400px; margin: 0 auto; padding: 40px 20px; }
+        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
         .section-header { display: flex; justify-content: space-between; align-items: baseline; margin: 40px 0 15px 0; border-left: 4px solid var(--accent); padding-left: 15px; }
-        .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 20px; overflow: hidden; margin-bottom: 20px; }
+        .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 20px; overflow: hidden; margin-bottom: 25px; }
         table { width: 100%; border-collapse: collapse; }
-        th { text-align: left; padding: 16px 24px; background: rgba(255,255,255,0.02); color: var(--text-secondary); font-size: 0.75rem; text-transform: uppercase; }
-        td { padding: 16px 24px; border-top: 1px solid var(--card-border); font-size: 0.9rem; }
+        th { text-align: left; padding: 12px 20px; background: rgba(255,255,255,0.02); color: var(--text-secondary); font-size: 0.7rem; text-transform: uppercase; }
+        td { padding: 12px 20px; border-top: 1px solid var(--card-border); font-size: 0.85rem; vertical-align: top; }
         
-        .sub-table { width: 100%; background: rgba(0,0,0,0.2); font-size: 0.75rem; }
-        .sub-table th { background: transparent; padding: 8px 24px; border: none; color: #6366f1; font-size: 0.65rem; }
-        .sub-table td { padding: 8px 24px; border-top: 1px solid rgba(255,255,255,0.03); color: #cbd5e1; }
+        .sub-table { width: 100%; background: rgba(0,0,0,0.25); border-top: 2px solid var(--accent); }
+        .sub-row { border-bottom: 1px solid rgba(255,255,255,0.05); }
+        .metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 8px; font-size: 0.75rem; }
+        .metric-item { background: rgba(255,255,255,0.03); padding: 5px 8px; border-radius: 6px; }
+        .metric-label { color: var(--text-secondary); font-size: 0.65rem; display: block; }
+        
+        .tag-badge { font-size: 0.6rem; padding: 2px 6px; border-radius: 4px; font-weight: 700; text-transform: uppercase; background: #374151; color: #d1d5db; }
+        .tag-core { background: rgba(16,185,129,0.1); color: #10b981; }
+        .tag-spec { background: rgba(239,68,68,0.1); color: #ef4444; }
         
         .positive { color: var(--success); } .negative { color: var(--danger); }
-        .bank-logo { width: 32px; height: 32px; border-radius: 8px; background: #fff; padding: 2px; object-fit: contain; }
-        .owner-tag { font-size: 0.7rem; color: var(--text-secondary); margin-top: 4px; }
-        .summary-box { background: linear-gradient(135deg, #1e293b, #0f172a); border-radius: 24px; padding: 25px; margin-bottom: 30px; border: 1px solid var(--card-border); }
+        .bank-logo { width: 28px; height: 28px; border-radius: 6px; background: #fff; padding: 2px; }
     </style>
 </head>
 <body>
     <div class="container">
         <header>
             <div style="display: flex; align-items: center; gap: 15px;">
-                <div style="width: 48px; height: 48px; background: var(--accent); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.5rem;">📊</div>
-                <div><div style="font-weight: 700; font-size: 1.2rem;">Finary Family Dashboard</div><div style="color: var(--text-secondary); font-size: 0.8rem;">Détails & Performances</div></div>
+                <div style="font-size: 2rem;">🚀</div>
+                <div><div style="font-weight: 800; font-size: 1.5rem;">Advanced Analytics</div><div style="color: var(--text-secondary); font-size: 0.8rem;">Momentum & Risk Engine Active</div></div>
             </div>
             <div style="display: flex; gap: 10px;">
-                <a href="/logs" class="btn btn-secondary">📋 Logs</a>
-                <button id="updateBtn" class="btn btn-primary" onclick="triggerUpdate()">🔄 Sync</button>
+                <button class="btn btn-secondary" onclick="window.location.reload()">🔄 Refresh</button>
+                <button class="btn btn-primary" onclick="triggerUpdate()">⚡ Sync Data</button>
             </div>
         </header>
-
-        <div class="summary-box">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <div>
-                    <div style="color: var(--text-secondary); font-size: 0.85rem;">Patrimoine Total Consolidé</div>
-                    <div style="font-size: 2.2rem; font-weight: 800;">{{ "{:,.2f}".format(total_wealth) }} €</div>
-                </div>
-                <div style="text-align: right;">
-                    <div style="color: var(--text-secondary); font-size: 0.8rem;">Dernière Sync</div>
-                    <div style="font-weight: 600;">{{ timestamp|format_date }}</div>
-                </div>
-            </div>
-        </div>
 
         {% for g_name, g_data in groups.items() %}
         {% if g_data.assets %}
         <div class="section-header">
-            <span style="font-size: 1.3rem; font-weight: 700;">{{ g_name }}</span>
-            <span style="font-size: 1rem; color: var(--accent);">{{ "{:,.2f}".format(g_data.total) }} €</span>
+            <span style="font-size: 1.4rem; font-weight: 800;">{{ g_name }}</span>
+            <span style="color: var(--accent); font-weight: 700;">{{ "{:,.0f}".format(g_data.total) }} €</span>
         </div>
         
         <div class="card">
             <table>
                 <thead>
                     <tr>
-                        <th style="width: 35%;">Actif Principal</th>
-                        <th style="width: 20%;">Valeur</th>
-                        <th style="width: 25%;">Perf. Totale</th>
-                        <th style="width: 20%;">Annualisée</th>
+                        <th style="width: 40%;">Actif / Enveloppe</th>
+                        <th style="width: 15%;">Valeur</th>
+                        <th style="width: 15%;">Poids Global</th>
+                        <th style="width: 15%;">Perf. Totale</th>
+                        <th style="width: 15%;">Type</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -224,55 +189,46 @@ HTML_TEMPLATE = """
                     <tr>
                         <td>
                             <div style="display: flex; align-items: center; gap: 12px;">
-                                {% if acc.logo %}<img src="{{ acc.logo }}" class="bank-logo">{% else %}<div class="bank-logo" style="background: #334155; display: flex; align-items: center; justify-content: center;">{{ acc.name[0] }}</div>{% endif %}
+                                {% if acc.logo %}<img src="{{ acc.logo }}" class="bank-logo">{% else %}<div class="bank-logo" style="background: #334155;"></div>{% endif %}
                                 <div>
                                     <div style="font-weight: 700;">{{ acc.name }}</div>
-                                    <div style="font-size: 0.75rem; color: var(--text-secondary);">{{ acc.institution }}</div>
-                                    <div class="owner-tag">
-                                        {% for o in acc.owners %}<span style="margin-right: 8px;">👤 {{ o.name }} {{ o.percent }}%</span>{% endfor %}
-                                    </div>
+                                    <div style="font-size: 0.7rem; color: var(--text-secondary);">{{ acc.institution }}</div>
                                 </div>
                             </div>
                         </td>
                         <td style="font-weight: 700;">{{ "{:,.2f}".format(acc.balance) }} €</td>
-                        <td class="{{ 'positive' if acc.upnl >= 0 else 'negative' }}">
-                            <div style="font-weight: 600;">{{ "{:+.2f}".format(acc.upnl) }} € ({{ "{:+.2f}%".format(acc.upnl_percent) }})</div>
-                        </td>
-                        <td style="font-weight: 600;" class="{{ 'positive' if acc.annualized_perf and acc.annualized_perf >= 0 else 'negative' }}">
-                            {% if acc.annualized_perf is not none %}{{ "{:+.2f}".format(acc.annualized_perf) }}%{% else %}-{% endif %}
-                        </td>
+                        <td style="font-weight: 600; color: var(--accent);">{{ "{:.1f}".format(acc.weight_global or 0) }}%</td>
+                        <td class="{{ 'positive' if acc.upnl_percent >= 0 else 'negative' }}" style="font-weight: 700;">{{ "{:+.2f}%".format(acc.upnl_percent) }}</td>
+                        <td><span class="tag-badge">{{ g_name[:-1] }}</span></td>
                     </tr>
                     
                     {% if acc.subs %}
                     <tr>
-                        <td colspan="4" style="padding: 0; border: none;">
+                        <td colspan="5" style="padding: 0; border: none;">
                             <table class="sub-table">
-                                <thead>
-                                    <tr>
-                                        <th style="width: 35%; padding-left: 68px;">Ligne / Valeur</th>
-                                        <th style="width: 15%;">Qté</th>
-                                        <th style="width: 15%;">PRU</th>
-                                        <th style="width: 15%;">Cours</th>
-                                        <th style="width: 20%;">Valeur / Perf.</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {% for s in acc.subs %}
-                                    <tr>
-                                        <td style="padding-left: 68px;">
-                                            <div style="font-weight: 700; {{ 'color: #fca5a5;' if s.value < 0 else '' }}">{{ s.name }}</div>
-                                            <div style="font-size: 0.6rem; color: #64748b;">{{ s.detail or "" }}</div>
-                                        </td>
-                                        <td>{{ "{:,.4f}".format(s.quantity) if s.quantity is not none else "-" }}</td>
-                                        <td style="color: var(--text-secondary);">{{ "{:,.2f}".format(s.pru) if s.pru is not none else "-" }} €</td>
-                                        <td style="font-weight: 600;">{{ "{:,.2f}".format(s.unit_price) if s.unit_price is not none else "-" }} €</td>
-                                        <td class="{{ 'positive' if s.perf and s.perf >= 0 else 'negative' }}">
-                                            <div style="font-weight: 700; color: var(--text-primary);">{{ "{:,.2f}".format(s.value) }} €</div>
-                                            <div style="font-size: 0.7rem;">{{ "{:+.2f}%".format(s.perf) if s.perf is not none else "" }}</div>
-                                        </td>
-                                    </tr>
-                                    {% endfor %}
-                                </tbody>
+                                {% for s in acc.subs %}
+                                <tr class="sub-row">
+                                    <td style="width: 35%; padding-left: 60px;">
+                                        <div style="display: flex; align-items: center; gap: 8px;">
+                                            <span class="tag-badge {{ 'tag-core' if s.strategic_tag == 'Core' else 'tag-spec' if s.strategic_tag == 'Spec' else '' }}">{{ s.strategic_tag }}</span>
+                                            <div style="font-weight: 700;">{{ s.name }}</div>
+                                        </div>
+                                        <div style="font-size: 0.65rem; color: #64748b; margin-top: 2px;">{{ s.detail or "" }} • {{ s.sector or "Diversifié" }}</div>
+                                    </td>
+                                    <td style="width: 15%;">
+                                        <div style="font-weight: 700;">{{ "{:,.2f}".format(s.value) }} €</div>
+                                        <div style="font-size: 0.65rem; color: var(--text-secondary);">{{ s.quantity or "" }} unités</div>
+                                    </td>
+                                    <td style="width: 50%;">
+                                        <div class="metric-grid">
+                                            <div class="metric-item"><span class="metric-label">1M / 3M</span><span class="{{ 'positive' if s.perf_1m and s.perf_1m > 0 else 'negative' }}">{{ "{:+.1f}%".format(s.perf_1m or 0) }}</span> / <span class="{{ 'positive' if s.perf_3m and s.perf_3m > 0 else 'negative' }}">{{ "{:+.1f}%".format(s.perf_3m or 0) }}</span></div>
+                                            <div class="metric-item"><span class="metric-label">YTD / 1Y</span><span class="{{ 'positive' if s.perf_ytd and s.perf_ytd > 0 else 'negative' }}">{{ "{:+.1f}%".format(s.perf_ytd or 0) }}</span> / <span class="{{ 'positive' if s.perf_1y and s.perf_1y > 0 else 'negative' }}">{{ "{:+.1f}%".format(s.perf_1y or 0) }}</span></div>
+                                            <div class="metric-item"><span class="metric-label">Bêta / Vol</span><span>{{ "{:.2f}".format(s.beta or 1.0) }}</span> / <span>{{ "{:.1f}%".format(s.volatility or 0) }}</span></div>
+                                            <div class="metric-item"><span class="metric-label">Poids Env.</span><span style="color: var(--accent); font-weight: 700;">{{ "{:.1f}%".format(s.weight_envelope or 0) }}</span></div>
+                                        </div>
+                                    </td>
+                                </tr>
+                                {% endfor %}
                             </table>
                         </td>
                     </tr>
@@ -286,7 +242,8 @@ HTML_TEMPLATE = """
     </div>
     <script>
         function triggerUpdate() {
-            fetch('/update', { method: 'POST' }).then(() => setTimeout(() => window.location.reload(), 3000));
+            const b = document.querySelector('.btn-primary'); b.innerText = "⏳ Synchronisation..."; b.disabled = true;
+            fetch('/update', { method: 'POST' }).then(() => setTimeout(() => window.location.reload(), 10000));
         }
     </script>
 </body>
@@ -315,7 +272,9 @@ def update():
     def run():
         global is_updating
         is_updating = True
-        try: FinaryClient(FINARY_EMAIL, FINARY_PASSWORD, FINARY_OTP_SECRET).fetch_and_save(DATA_DIR)
+        try:
+            client = FinaryClient(FINARY_EMAIL, FINARY_PASSWORD, FINARY_OTP_SECRET)
+            client.fetch_and_save(DATA_DIR)
         finally: is_updating = False
     threading.Thread(target=run).start()
     return jsonify({"status": "success"})
