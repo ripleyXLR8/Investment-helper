@@ -51,9 +51,8 @@ class FinaryClient:
             logging.info("Fetching ALL organizations and data...")
             me_data = get_user_me(self.session)
             orgs_response = get_user_me_organizations(self.session)
-            organizations = orgs_response.get("result", [])
+            organizations = orgs_response.get("result", []) if isinstance(orgs_response, dict) else orgs_response
             
-            # Start with personal view
             all_assets = {
                 "investments": [],
                 "cryptos": [],
@@ -67,18 +66,21 @@ class FinaryClient:
             logging.info("Fetching Personal assets...")
             for cat in all_assets.keys():
                 try:
-                    data = get_portfolio(self.session, cat).get("result", {})
-                    all_assets[cat].extend(self._extract_items(cat, data))
-                    total_wealth += data.get("total", {}).get("amount", 0)
-                except: pass
+                    res = get_portfolio(self.session, cat)
+                    data = res.get("result", {}) if isinstance(res, dict) else {}
+                    items = self._extract_items(cat, data)
+                    all_assets[cat].extend(items)
+                    total_wealth += data.get("total", {}).get("amount", 0) if isinstance(data, dict) else 0
+                except Exception as e:
+                    logging.debug(f"Skipping personal {cat}: {e}")
 
-            # 2. Fetch Assets for each Organization (Family, Business, etc.)
+            # 2. Fetch Assets for each Organization
             for org in organizations:
+                if not isinstance(org, dict): continue
                 org_id = org.get("id")
                 org_name = org.get("name")
                 logging.info(f"Fetching assets for organization: {org_name} ({org_id})...")
                 
-                # Mapping functions
                 org_funcs = {
                     "investments": get_organization_investments,
                     "cryptos": get_organization_cryptos,
@@ -89,11 +91,21 @@ class FinaryClient:
                 
                 for cat, func in org_funcs.items():
                     try:
-                        data = func(self.session, org_id).get("result", {})
-                        items = self._extract_items(cat, data)
-                        # Avoid duplicates if Finary repeats items in different views
+                        res = func(self.session, org_id)
+                        # Handle both List (direct items) and Dict (wrapped result)
+                        if isinstance(res, list):
+                            items = res
+                            # Try to estimate wealth contribution if possible (simplification)
+                            for item in items:
+                                total_wealth += item.get("balance", 0) if isinstance(item, dict) else 0
+                        elif isinstance(res, dict):
+                            data = res.get("result", res)
+                            items = self._extract_items(cat, data)
+                            total_wealth += data.get("total", {}).get("amount", 0) if isinstance(data, dict) and "total" in data else 0
+                        else:
+                            items = []
+                        
                         all_assets[cat].extend(items)
-                        total_wealth += data.get("total", {}).get("amount", 0)
                     except Exception as e:
                         logging.warning(f"Error fetching {cat} for org {org_name}: {e}")
 
@@ -116,11 +128,11 @@ class FinaryClient:
             logging.info(f"Consolidated data saved to {filepath}")
             return True
         except Exception as e:
-            logging.error(f"Error: {e}")
+            logging.error(f"Global Error: {e}")
             return False
 
     def _extract_items(self, category, data):
-        """Helper to extract the actual list of items from Finary response."""
+        if not isinstance(data, dict): return []
         if category == "investments": return data.get("accounts", [])
         if category == "cryptos": return data.get("cryptos", [])
         if category == "fonds_euro": return data.get("fonds_euro", [])
