@@ -13,9 +13,6 @@ FINARY_OTP_SECRET = os.getenv("FINARY_OTP_SECRET")
 
 is_updating = False
 
-# HTML template remains mostly the same, but we ensure values are handled correctly.
-# (I'll keep the template short in this write_to_file but ensure logic is solid)
-
 def get_item_value(item):
     if not isinstance(item, dict): return 0
     return (
@@ -37,27 +34,47 @@ def get_financial_data():
         categories = summary.get("categories", {})
         accounts = []
         seen_ids = set()
+        
+        # Get current user slug to identify their share
+        me_slug = raw.get("me", {}).get("result", {}).get("slug")
 
         def add_acc(item, cat_name):
             if not isinstance(item, dict): return
-            # Better ID detection to avoid duplicates across Personal/Family views
             item_id = str(item.get("id") or item.get("slug") or item.get("name") or "")
             if item_id in seen_ids: return
             seen_ids.add(item_id)
             
-            balance = get_item_value(item)
-            name = item.get("display_name") or item.get("name") or "Inconnu"
+            # Repartition Analysis
+            owners = []
+            user_share = 1.0
+            repartition = item.get("ownership_repartition", [])
             
-            # Crypto specific name formatting
+            if repartition:
+                total_shares = sum(float(r.get("share", 0)) for r in repartition)
+                for r in repartition:
+                    member = r.get("membership", {}).get("member", {})
+                    name = member.get("firstname") or member.get("fullname") or "Inconnu"
+                    share = float(r.get("share", 0))
+                    owners.append({"name": name, "percent": int(share * 100)})
+                    # If this is the logged-in user, track their share to calculate 100% value
+                    if member.get("slug") == me_slug:
+                        user_share = share
+
+            # Calculate 100% Value
+            partial_balance = get_item_value(item)
+            if user_share > 0 and user_share < 1.0:
+                # If balance seems to be the user's share (common in Finary API)
+                full_balance = partial_balance / user_share
+            else:
+                full_balance = partial_balance
+
+            name = item.get("display_name") or item.get("name") or "Inconnu"
             if cat_name == "cryptos" and "crypto" in item:
                 crypto_info = item.get("crypto", {})
                 symbol = crypto_info.get("symbol", "")
                 quantity = item.get("quantity")
-                if quantity:
-                    name = f"{quantity} {symbol}" if symbol else f"{quantity} Crypto"
-                elif not name or name == "Inconnu":
-                    name = crypto_info.get("name") or symbol or "Crypto"
-
+                if quantity: name = f"{quantity} {symbol}"
+            
             institution = item.get("bank", {}).get("name") or item.get("institution_name") or ""
             if not institution:
                 if cat_name == "real_estates": institution = "Immobilier"
@@ -66,8 +83,9 @@ def get_financial_data():
 
             accounts.append({
                 "name": name, "institution": institution,
+                "owners": owners,
                 "logo": item.get("logo_url") or (item.get("crypto", {}).get("logo_url") if "crypto" in item else ""),
-                "balance": float(balance), 
+                "balance": float(full_balance),
                 "upnl": float(item.get("upnl") or item.get("current_upnl") or 0),
                 "upnl_percent": float(item.get("upnl_percent") or item.get("current_upnl_percent") or 0),
                 "type": cat_name.replace("_", " ").title()
@@ -77,20 +95,19 @@ def get_financial_data():
             if isinstance(items, list):
                 for item in items: add_acc(item, cat)
 
+        sorted_accounts = sorted(accounts, key=lambda x: x['balance'], reverse=True)
+        total_wealth = sum(a['balance'] for a in sorted_accounts)
+
         return {
-            "timestamp": raw.get("timestamp"), # Dashboard format_date handles it
+            "timestamp": raw.get("timestamp"),
             "organizations": raw.get("organizations", []),
-            "total_wealth": summary.get("total_amount", 0),
-            "accounts": sorted(accounts, key=lambda x: x['balance'], reverse=True)
+            "total_wealth": total_wealth,
+            "accounts": sorted_accounts
         }
     except Exception as e:
         logging.error(f"Error parsing financial data: {e}")
         return None
 
-# Rest of the file (HTML_TEMPLATE and routes) remains the same as previous version
-# I'll just include the full content to be safe and ensure everything is updated.
-
-# [REUSE HTML_TEMPLATE from previous turn]
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="fr">
@@ -117,9 +134,11 @@ HTML_TEMPLATE = """
         .card-value { font-size: 1.8rem; font-weight: 700; display: block; }
         table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 16px; overflow: hidden; }
         th { text-align: left; padding: 16px 24px; background: rgba(255,255,255,0.02); color: var(--text-secondary); font-size: 0.75rem; text-transform: uppercase; }
-        td { padding: 16px 24px; border-top: 1px solid var(--card-border); font-size: 0.9rem; }
-        .bank-logo { width: 28px; height: 28px; border-radius: 6px; background: #fff; padding: 2px; object-fit: contain; }
+        td { padding: 16px 24px; border-top: 1px solid var(--card-border); font-size: 0.9rem; vertical-align: middle; }
+        .bank-logo { width: 32px; height: 32px; border-radius: 8px; background: #fff; padding: 2px; object-fit: contain; }
         .badge { padding: 4px 8px; border-radius: 6px; font-size: 0.65rem; font-weight: 700; text-transform: uppercase; background: rgba(56,189,248,0.1); color: var(--accent); }
+        .owner-tag { font-size: 0.7rem; color: var(--text-secondary); display: flex; gap: 8px; margin-top: 4px; }
+        .owner-item { background: rgba(255,255,255,0.05); padding: 1px 6px; border-radius: 4px; }
         .positive { color: var(--success); } .negative { color: var(--danger); }
         .spinner { width: 14px; height: 14px; border: 2px solid rgba(0,0,0,0.2); border-top: 2px solid #000; border-radius: 50%; animation: spin 1s linear infinite; display: none; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -130,8 +149,8 @@ HTML_TEMPLATE = """
     <div class="container">
         <header>
             <div style="display: flex; align-items: center; gap: 15px;">
-                <div style="width: 48px; height: 48px; background: linear-gradient(135deg, var(--accent), #818cf8); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-weight: 700;">👪</div>
-                <div><div style="font-weight: 700;">Patrimoine Consolidé</div><div style="color: var(--text-secondary); font-size: 0.8rem;">Espaces : {% for org in organizations %}{{ org.name or "Famille" }}{% if not loop.last %}, {% endif %}{% endfor %}</div></div>
+                <div style="width: 48px; height: 48px; background: linear-gradient(135deg, var(--accent), #818cf8); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 1.5rem;">🏘️</div>
+                <div><div style="font-weight: 700; font-size: 1.2rem;">Finary Family Dashboard</div><div style="color: var(--text-secondary); font-size: 0.8rem;">Vue consolidée à 100%</div></div>
             </div>
             <div class="btn-group">
                 <a href="/logs" class="btn btn-secondary">📋 Logs</a>
@@ -141,31 +160,42 @@ HTML_TEMPLATE = """
         </header>
 
         <div class="summary-grid">
-            <div class="card"><span class="card-label">Patrimoine Brut</span><span class="card-value">{{ "{:,.2f}".format(total_wealth) }} €</span></div>
-            <div class="card"><span class="card-label">Actifs répertoriés</span><span class="card-value">{{ accounts|length }}</span></div>
+            <div class="card"><span class="card-label">Patrimoine Brut (100%)</span><span class="card-value">{{ "{:,.2f}".format(total_wealth) }} €</span></div>
+            <div class="card"><span class="card-label">Actifs consolidés</span><span class="card-value">{{ accounts|length }}</span></div>
             <div class="card"><span class="card-label">Dernière Sync</span><span class="card-value" style="font-size: 1.2rem; margin-top: 10px;">{{ timestamp|format_date }}</span></div>
         </div>
 
         <table>
-            <thead><tr><th>Actif / Institution</th><th>Catégorie</th><th>Valeur Actuelle</th><th>Performance</th></tr></thead>
+            <thead><tr><th>Actif / Institution</th><th>Catégorie</th><th>Valeur (100%)</th><th>Performance</th></tr></thead>
             <tbody>
                 {% for acc in accounts %}
                 <tr>
                     <td>
-                        <div style="display: flex; align-items: center; gap: 12px;">
+                        <div style="display: flex; align-items: center; gap: 15px;">
                             {% if acc.logo %}
                             <img src="{{ acc.logo }}" class="bank-logo" onerror="this.style.display='none'">
                             {% else %}
-                            <div class="bank-logo" style="background: var(--card-border); display: flex; align-items: center; justify-content: center; font-size: 0.8rem;">{{ acc.name[0] }}</div>
+                            <div class="bank-logo" style="background: var(--card-border); display: flex; align-items: center; justify-content: center; font-size: 1rem; font-weight: bold; color: var(--accent);">{{ acc.name[0] }}</div>
                             {% endif %}
-                            <div><div style="font-weight: 600;">{{ acc.name }}</div><div style="font-size: 0.75rem; color: var(--text-secondary);">{{ acc.institution }}</div></div>
+                            <div>
+                                <div style="font-weight: 700; font-size: 0.95rem;">{{ acc.name }}</div>
+                                <div style="font-size: 0.8rem; color: var(--text-secondary);">{{ acc.institution }}</div>
+                                {% if acc.owners %}
+                                <div class="owner-tag">
+                                    {% for owner in acc.owners %}
+                                    <span class="owner-item">👤 {{ owner.name }} {{ owner.percent }}%</span>
+                                    {% endfor %}
+                                </div>
+                                {% endif %}
+                            </div>
                         </div>
                     </td>
                     <td><span class="badge">{{ acc.type }}</span></td>
-                    <td style="font-weight: 700;">{{ "{:,.2f}".format(acc.balance) }} €</td>
+                    <td style="font-weight: 700; font-size: 1rem;">{{ "{:,.2f}".format(acc.balance) }} €</td>
                     <td class="{{ 'positive' if acc.upnl >= 0 else 'negative' }}">
                         {% if acc.upnl != 0 %}
-                        {{ "+" if acc.upnl >= 0 }}{{ "{:,.2f}".format(acc.upnl) }} € ({{ "{:.2f}".format(acc.upnl_percent) }}%)
+                        <div style="font-weight: 600;">{{ "+" if acc.upnl >= 0 }}{{ "{:,.2f}".format(acc.upnl) }} €</div>
+                        <div style="font-size: 0.75rem;">({{ "{:.2f}".format(acc.upnl_percent) }}%)</div>
                         {% else %}-{% endif %}
                     </td>
                 </tr>
