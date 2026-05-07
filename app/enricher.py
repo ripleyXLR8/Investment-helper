@@ -143,11 +143,20 @@ class FinancialEnricher:
             ytd_price = hist['Close'].iloc[ytd_idx]
             high_52w = hist['High'].iloc[-252:].max() if len(hist) > 0 else 0
 
+            # Calculation of Volatility (annualized)
+            daily_returns = hist['Close'].pct_change().dropna()
+            volatility = float(daily_returns.std() * (252**0.5) * 100) if not daily_returns.empty else 0.0
+
+            # Beta from yfinance info (slower, but accurate if available)
+            beta = t.info.get('beta', 1.0) if resolved_ticker != "CASH" else 1.0
+
             metrics = {
                 "perf_1m": round(get_perf(30), 2),
                 "perf_3m": round(get_perf(90), 2),
                 "perf_1y": round(get_perf(365), 2),
                 "perf_ytd": round(((current_price / ytd_price) - 1) * 100, 2) if ytd_price != 0 else 0,
+                "beta": round(float(beta or 1.0), 2),
+                "volatility": round(volatility, 2),
                 "dist_52w_high": round(((current_price / high_52w) - 1) * 100, 2) if high_52w != 0 else 0
             }
             self.cache[resolved_ticker] = {"timestamp": now.isoformat(), "data": metrics}
@@ -156,4 +165,4 @@ class FinancialEnricher:
             return self._get_default_metrics()
 
     def _get_default_metrics(self):
-        return {"perf_1m": 0.0, "perf_3m": 0.0, "perf_1y": 0.0, "perf_ytd": 0.0, "dist_52w_high": 0.0}
+        return {"perf_1m": 0.0, "perf_3m": 0.0, "perf_1y": 0.0, "perf_ytd": 0.0, "beta": 1.0, "volatility": 0.0, "dist_52w_high": 0.0}
