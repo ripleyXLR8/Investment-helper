@@ -62,7 +62,11 @@ class FinancialEnricher:
         logging.info("--- STARTING DEEP FINANCIAL ENRICHMENT ---")
         categories = data.get("portfolio_summary", {}).get("categories", {})
         
-        # 1. Collect everything to resolve (Accounts + Holdings)
+        # 1. Fetch benchmark data (S&P 500) for manual beta calculation
+        self.benchmark_hist = yf.Ticker("^GSPC").history(period="2y")['Close'].pct_change().dropna()
+        self.benchmark_hist.index = self.benchmark_hist.index.tz_localize(None)
+
+        # 2. Collect everything to resolve (Accounts + Holdings)
         to_resolve = []
         for cat in ['investments', 'cryptos']:
             if cat in categories:
@@ -147,15 +151,29 @@ class FinancialEnricher:
             daily_returns = hist['Close'].pct_change().dropna()
             volatility = float(daily_returns.std() * (252**0.5) * 100) if not daily_returns.empty else 0.0
 
-            # Beta from yfinance info (slower, but accurate if available)
-            beta = t.info.get('beta', 1.0) if resolved_ticker != "CASH" else 1.0
+            # Manual Beta calculation against S&P 500
+            beta_manual = 1.0
+            if not daily_returns.empty and not self.benchmark_hist.empty:
+                try:
+                    # Align returns
+                    combined = pd.concat([daily_returns, self.benchmark_hist], axis=1).dropna()
+                    if len(combined) > 20:
+                        cov = combined.cov().iloc[0, 1]
+                        var = combined.iloc[:, 1].var()
+                        beta_manual = cov / var if var != 0 else 1.0
+                except:
+                    pass
+
+            # Beta from yfinance info
+            beta_yahoo = t.info.get('beta')
 
             metrics = {
                 "perf_1m": round(get_perf(30), 2),
                 "perf_3m": round(get_perf(90), 2),
                 "perf_1y": round(get_perf(365), 2),
                 "perf_ytd": round(((current_price / ytd_price) - 1) * 100, 2) if ytd_price != 0 else 0,
-                "beta": round(float(beta or 1.0), 2),
+                "beta": round(float(beta_yahoo) if beta_yahoo else 0, 2),
+                "beta_manual": round(float(beta_manual), 2),
                 "volatility": round(volatility, 2),
                 "dist_52w_high": round(((current_price / high_52w) - 1) * 100, 2) if high_52w != 0 else 0
             }
@@ -165,4 +183,4 @@ class FinancialEnricher:
             return self._get_default_metrics()
 
     def _get_default_metrics(self):
-        return {"perf_1m": 0.0, "perf_3m": 0.0, "perf_1y": 0.0, "perf_ytd": 0.0, "beta": 1.0, "volatility": 0.0, "dist_52w_high": 0.0}
+        return {"perf_1m": 0.0, "perf_3m": 0.0, "perf_1y": 0.0, "perf_ytd": 0.0, "beta": 0.0, "beta_manual": 1.0, "volatility": 0.0, "dist_52w_high": 0.0}

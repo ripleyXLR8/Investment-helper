@@ -75,7 +75,7 @@ def get_financial_data():
                         "perf_3m": s.get("perf_3m") if pd.notnull(s.get("perf_3m")) else sec_info.get("perf_3m", 0),
                         "perf_1y": s.get("perf_1y") if pd.notnull(s.get("perf_1y")) else sec_info.get("perf_1y", 0),
                         "perf_ytd": s.get("perf_ytd") if pd.notnull(s.get("perf_ytd")) else sec_info.get("perf_ytd", 0),
-                        "beta": s.get("beta"), "volatility": s.get("volatility"),
+                        "beta": s.get("beta"), "beta_manual": s.get("beta_manual"), "volatility": s.get("volatility"),
                         "sector": s.get("sector"), "geography": s.get("geography"),
                         "weight_global": s.get("weight_global"), "weight_envelope": s.get("weight_envelope"),
                         "strategic_tag": s.get("strategic_tag", "Core"),
@@ -274,7 +274,11 @@ HTML_TEMPLATE = """
                                         <div class="metric-grid">
                                             <div class="metric-item"><span class="metric-label">1M / 3M</span><span class="{{ 'positive' if s.perf_1m and s.perf_1m > 0 else 'negative' }}">{{ "{:+.1f}%".format(s.perf_1m or 0) }}</span> / <span class="{{ 'positive' if s.perf_3m and s.perf_3m > 0 else 'negative' }}">{{ "{:+.1f}%".format(s.perf_3m or 0) }}</span></div>
                                             <div class="metric-item"><span class="metric-label">YTD / 1Y</span><span class="{{ 'positive' if s.perf_ytd and s.perf_ytd > 0 else 'negative' }}">{{ "{:+.1f}%".format(s.perf_ytd or 0) }}</span> / <span class="{{ 'positive' if s.perf_1y and s.perf_1y > 0 else 'negative' }}">{{ "{:+.1f}%".format(s.perf_1y or 0) }}</span></div>
-                                            <div class="metric-item"><span class="metric-label">Bêta / Vol</span><span style="font-weight: 600;">{{ "{:.2f}".format(s.beta or 1.0) }}</span> / <span style="font-weight: 600;">{{ "{:.1f}%".format(s.volatility or 0) }}</span></div>
+                                            <div class="metric-item">
+                                                <span class="metric-label">Bêta (Y / M) / Vol</span>
+                                                <span style="font-weight: 600;">{{ "{:.2f}".format(s.beta or 0) }} / {{ "{:.2f}".format(s.beta_manual or 1.0) }}</span> / 
+                                                <span style="font-weight: 600;">{{ "{:.1f}%".format(s.volatility or 0) }}</span>
+                                            </div>
                                             <div class="metric-item"><span class="metric-label">Poids Env.</span><span style="color: var(--accent); font-weight: 800;">{{ "{:.1f}%".format(s.weight_envelope or 0) }}</span></div>
                                         </div>
                                     </td>
