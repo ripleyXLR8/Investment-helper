@@ -247,7 +247,9 @@ HTML_TEMPLATE = """
                                 <tr class="sub-row">
                                     <td style="width: 35%; padding-left: 65px;">
                                         <div style="display: flex; align-items: center; gap: 10px;">
-                                            <span class="tag-badge {{ 'tag-core' if s.strategic_tag == 'Core' else 'tag-spec' if s.strategic_tag == 'Spec' else '' }}">{{ s.strategic_tag }}</span>
+                                            <span class="tag-badge {{ 'tag-core' if s.strategic_tag == 'Core' else 'tag-spec' if s.strategic_tag == 'Spec' else '' }}">
+                                                {{ s.strategic_tag }}{% if s.ticker %} | {{ s.ticker }}{% endif %}
+                                            </span>
                                             <div style="font-weight: 700;">{{ s.name }}</div>
                                         </div>
                                         <div style="font-size: 0.65rem; color: #64748b; margin-top: 4px;">

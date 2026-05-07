@@ -14,6 +14,7 @@ class FinancialEnricher:
         self.llm = LLMMapper()
         self.manual_mapping = {
             "Plan d'Epargne France du Groupe Air Liquide": "AI.PA",
+            "Air Liquide Prime de Fidélité": "AI.PA",
             "AirLiquide - MyShare": "AI.PA",
             "AirLiquide - Performance Share": "AI.PA",
             "PEA - Bourse Direct": "CW8.PA",
@@ -22,6 +23,9 @@ class FinancialEnricher:
             "Trade Republic": "XEON.DE",
             "AXA.PA": "CS.PA",
             "FR0013412269": "UST.PA",
+            "FR0011871128": "500.PA",
+            "LU1681047319": "MSE.PA",
+            "FR0011550193": "ETZ.PA",
             "Amundi PEA US Tech ESG UCITS ETF Acc": "UST.PA",
             "Amundi PEA S&P 500 UCITS ETF Acc": "500.PA",
             "Amundi Euro Stoxx 50 UCITS ETF DR - EUR (D)": "MSE.PA",
@@ -79,18 +83,26 @@ class FinancialEnricher:
                     # Deep enrichment for individual stocks/ETFs
                     if "holdings" in account:
                         for holding in account["holdings"]:
-                            metrics = self._fetch_metrics(self.get_ticker(holding))
+                            ticker = self.get_ticker(holding)
+                            resolved = self.llm.mapping.get(ticker, ticker)
+                            metrics = self._fetch_metrics(ticker)
                             holding.update(metrics)
+                            holding["ticker"] = resolved
                             if "security" in holding:
                                 holding["security"].update(metrics)
+                                holding["security"]["ticker"] = resolved
                     
                     # Finary sometimes uses 'securities' instead of 'holdings'
                     if "securities" in account:
                         for s in account["securities"]:
-                            metrics = self._fetch_metrics(self.get_ticker(s))
+                            ticker = self.get_ticker(s)
+                            resolved = self.llm.mapping.get(ticker, ticker)
+                            metrics = self._fetch_metrics(ticker)
                             s.update(metrics)
+                            s["ticker"] = resolved
                             if "security" in s:
                                 s["security"].update(metrics)
+                                s["security"]["ticker"] = resolved
         
         self._save_cache()
         logging.info("--- DEEP ENRICHMENT COMPLETED ---")
@@ -113,8 +125,12 @@ class FinancialEnricher:
             hist = t.history(period="2y")
             if hist.empty: return self._get_default_metrics()
 
+            # Fix for NaN values often present in last row for European tickers
+            hist = hist.dropna(subset=['Close'])
+            if hist.empty: return self._get_default_metrics()
+
             hist.index = hist.index.tz_localize(None)
-            current_price = hist['Close'].iloc[-1]
+            current_price = float(hist['Close'].iloc[-1])
             
             def get_perf(days):
                 target_date = hist.index[-1] - timedelta(days=days)
