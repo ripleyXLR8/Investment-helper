@@ -250,7 +250,14 @@ HTML_TEMPLATE = """
                                             <span class="tag-badge {{ 'tag-core' if s.strategic_tag == 'Core' else 'tag-spec' if s.strategic_tag == 'Spec' else '' }}">{{ s.strategic_tag }}</span>
                                             <div style="font-weight: 700;">{{ s.name }}</div>
                                         </div>
-                                        <div style="font-size: 0.65rem; color: #64748b; margin-top: 4px;">{{ s.detail or "" }} • {{ s.sector or "Diversifié" }}</div>
+                                        <div style="font-size: 0.65rem; color: #64748b; margin-top: 4px;">
+                                            {{ s.detail or "" }} • {{ s.sector or "Diversifié" }}
+                                            {% if s.ticker %}
+                                            • <a href="https://finance.yahoo.com/quote/{{ s.ticker }}" target="_blank" style="color: var(--accent); text-decoration: none; font-weight: 700; border-bottom: 1px dashed var(--accent);">
+                                                {{ s.ticker }} ↗
+                                            </a>
+                                            {% endif %}
+                                        </div>
                                     </td>
                                     <td style="width: 15%;">
                                         <div style="font-weight: 700; {{ 'color: var(--danger);' if s.value < 0 else '' }}">{{ "{:,.2f}".format(s.value) }} €</div>
